@@ -17,6 +17,9 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
+    'ffmpeg-python',
+    'numpy',
+    'matplotlib',
 ]
 
 [project.optional-dependencies]
