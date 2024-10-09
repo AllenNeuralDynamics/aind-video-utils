@@ -5,39 +5,24 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aind-video-utils"
 description = "Generated from aind-library-template"
-license = {text = "MIT"}
+license = { text = "MIT" }
 requires-python = ">=3.7"
-authors = [
-    {name = "Allen Institute for Neural Dynamics"}
-]
-classifiers = [
-    "Programming Language :: Python :: 3"
-]
+authors = [{ name = "Allen Institute for Neural Dynamics" }]
+classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
 dynamic = ["version"]
 
-dependencies = [
-    'ffmpeg-python',
-    'numpy',
-    'matplotlib',
-]
+dependencies = ['ffmpeg-python', 'numpy', 'matplotlib']
 
 [project.optional-dependencies]
-dev = [
-    'black',
-    'coverage',
-    'flake8',
-    'interrogate',
-    'isort',
-    'Sphinx',
-    'furo'
-]
+dev = ['black', 'coverage', 'flake8', 'interrogate', 'isort', 'Sphinx', 'furo']
+notebooks = ['pandas', 'seaborn', 'ipympl']
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "aind_video_utils.__version__"}
+version = { attr = "aind_video_utils.__version__" }
 
 [tool.black]
 line-length = 79
@@ -69,7 +54,7 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "from",
     "import",
-    "pragma: no cover"
+    "pragma: no cover",
 ]
 fail_under = 100
 
