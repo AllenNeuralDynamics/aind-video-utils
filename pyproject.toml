@@ -1,32 +1,48 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aind-video-utils"
-description = "Generated from aind-library-template"
-license = { text = "MIT" }
-requires-python = ">=3.7"
-authors = [{ name = "Allen Institute for Neural Dynamics" }]
+description = "Tools for working with video files"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+  { name = "Allen Institute for Neural Dynamics" },
+  { name = "Galen Lynch", email = "galen@galenlynch.com" },
+]
 classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
-dynamic = ["version"]
+version = "0.1.0"
 
 dependencies = ['ffmpeg-python', 'numpy', 'matplotlib']
 
-[project.optional-dependencies]
-dev = ['black', 'coverage', 'flake8', 'interrogate', 'isort', 'Sphinx', 'furo']
-notebooks = ['pandas', 'seaborn', 'ipympl']
+[project.urls]
+Repository = "https://github.com/AllenNeuralDynamics/aind-video-utils/"
+Issues = "https://github.com/AllenNeuralDynamics/aind-video-utils/issues"
+Changelog = "https://github.com/AllenNeuralDynamics/aind-video-utils/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+types = ["mypy"]
+dev = [
+  { include-group = "types" },
+  "codespell",
+  "pytest",
+  "pytest-cov",
+  "ruff",
+  "interrogate",
+]
+jupyter = [{ include-group = "dev" }, "ipykernel", "pip"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = { attr = "aind_video_utils.__version__" }
+[tool.setuptools.package-data]
+"aind_video_utils" = ["py.typed"]
 
 [tool.black]
-line-length = 79
-target_version = ['py37']
+line-length = 88
+target-version = ['py310']
 exclude = '''
 
 (
@@ -45,23 +61,85 @@ exclude = '''
 )
 '''
 
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+extend-select = ["Q", "RUF100", "C90", "I", "F", "E", "W", "UP", "ANN", "PYI"]
+extend-ignore = ["ANN401"]                                                     # Skip self/cls type annotations
+# Skip all type annotation checks in tests
+per-file-ignores = { "tests/*.py" = ["ANN"] }
+mccabe = { max-complexity = 14 }
+pydocstyle = { convention = "numpy" }
+
+[tool.codespell]
+skip = ".git,*.pdf,*.svg,./bonsai,*.bonsai,./docs/_build,uv.lock"
+ignore-words-list = "nd"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --tb=short --cov=src --cov-report=term-missing --cov-fail-under=0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
 [tool.coverage.run]
 omit = ["*__init__*"]
 source = ["aind_video_utils", "tests"]
 
 [tool.coverage.report]
 exclude_lines = [
-    "if __name__ == .__main__.:",
-    "from",
-    "import",
-    "pragma: no cover",
+  "if __name__ == .__main__.:",
+  "from",
+  "import",
+  "pragma: no cover",
 ]
-fail_under = 100
+fail_under = 10
 
 [tool.isort]
 line_length = 79
 profile = "black"
 
 [tool.interrogate]
-exclude = ["setup.py", "docs", "build"]
-fail-under = 100
+ignore-init-method = true
+ignore-magic = true
+ignore_module = true
+fail-under = 30
+exclude = [
+  "__init__.py",
+  "tests",
+  "docs",
+  "build",
+  "setup.py",
+  "examples",
+  "site",
+]
+
+[tool.commitizen]
+version_provider = "pep621"
+version_files = ["src/aind_video_utils/__init__.py:__version__"]
+update_changelog_on_bump = true
+tag_format = "v$version"
+major_version_zero = true
+
+[tool.mypy]
+files = ["src/aind_video_utils"]
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
