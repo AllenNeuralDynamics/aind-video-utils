@@ -1,6 +1,6 @@
 # %%
 from matplotlib import pyplot as plt
-import matplotlib.ticker as ticker
+import matplotlib.ticker as tck
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -8,7 +8,7 @@ import seaborn as sns
 # %matplotlib ipympl
 # %%
 # Data location
-benchmarks_file = "/home/glynch/encoding-tests/benchmarks.csv"
+benchmarks_file = "/home/galen.lynch/encode-testing/benchmarks.csv"
 
 # %%
 # Load the data
@@ -25,22 +25,65 @@ benchmarks.set_index("nickname", inplace=True)
 # %%
 # Plotting functions
 def tufte_style_lineplot(
-    ax, x, y, color="black", dotsize=20, legend=None, **kwargs
+    ax, x, y, color="black", dotsize=20, label=None, **kwargs
 ):
     ax.plot(x, y, linestyle="-", color=color, linewidth=1, zorder=1, **kwargs)
     ax.scatter(x, y, color="white", s=100, zorder=2)
-    ax.scatter(x, y, color=color, s=dotsize, zorder=3)
+    ax.scatter(x, y, color=color, s=dotsize, zorder=3, label=label)
 
 
-def tufte_style_scatter(
-    ax, x, y, color="black", dotsize=20, legend=None, **kwargs
-):
+def tufte_style_scatter(ax, x, y, color="black", dotsize=20, **kwargs):
     ax.scatter(x, y, color="white", s=100, zorder=2)
     ax.scatter(x, y, color=color, s=dotsize, zorder=3, **kwargs)
 
 
+def plot_data_convenience_fun(xs, ys, clip_lt=None, clip_gt=None):
+    xsperm = np.argsort(xs)
+    xs_out = xs[xsperm]
+    ys_out = ys[xsperm]
+    if clip_lt is not None:
+        clipmask = xs_out > clip_lt
+        xs_out = xs_out[clipmask]
+        ys_out = ys_out[clipmask]
+    if clip_gt is not None:
+        clipmask = xs_out < clip_gt
+        xs_out = xs_out[clipmask]
+        ys_out = ys_out[clipmask]
+
+    return xs_out, ys_out
+
+
+# %%
+f, ax = plt.subplots()
+seldata = benchmarks[
+    benchmarks.index.str.startswith("h264")
+    & ~benchmarks.index.str.endswith("_constrained")
+]
+x_var = "fps"
+y_var = "vmaf"
+ax = sns.scatterplot(
+    seldata,
+    x=x_var,
+    y=y_var,
+    hue="preset",
+    style="compute_type",
+    ax=ax,
+)
+for i, nickname in enumerate(
+    ["pipeline_encode", "lili_encode", "twostage_encode"]
+):
+    ax.scatter(
+        benchmarks.loc[nickname, x_var],
+        benchmarks.loc[nickname, y_var],
+        marker="o",
+        color=f"C{i + 3}",
+        label=nickname,
+    )
+ax.legend()
+
 # %%
 # Select data where nickname starts with "h264" but is not "h264_nvenc_constrained"
+f, ax = plt.subplots()
 seldata = benchmarks[
     benchmarks.index.str.startswith("h264")
     & ~benchmarks.index.str.endswith("_constrained")
@@ -51,6 +94,7 @@ ax = sns.scatterplot(
     y="vmaf",
     hue="preset",
     style="compute_type",
+    ax=ax,
 )
 for i, nickname in enumerate(
     ["pipeline_encode", "lili_encode", "twostage_encode"]
@@ -79,6 +123,17 @@ sns.relplot(
 )
 
 # %%
+seldata = benchmarks[
+    benchmarks.index.str.startswith("h264_slow")
+    | benchmarks.index.str.startswith("h265_slow")
+]
+sns.relplot(
+    seldata,
+    x="compression_ratio",
+    y="vmaf",
+    hue="codec_type",
+)
+# %%
 # Select data where the nickname contains "nvenc" and does not end with "constrained"
 seldata = benchmarks[
     benchmarks.index.str.contains("nvenc")
@@ -98,12 +153,9 @@ sns.relplot(
 )
 
 # %%
-
+f, ax = plt.subplots()
 ax = sns.scatterplot(
-    seldata,
-    x="compression_ratio",
-    y="vmaf",
-    hue="codec_type",
+    seldata, x="compression_ratio", y="vmaf", hue="codec_type", ax=ax
 )
 for i, nickname in enumerate(
     ["pipeline_encode", "lili_encode", "twostage_encode"]
@@ -117,6 +169,7 @@ for i, nickname in enumerate(
     )
 ax.legend()
 # %%
+f, ax = plt.subplots()
 x_var = "compression_ratio"
 y_var = "fps"
 ax = sns.scatterplot(
@@ -124,6 +177,7 @@ ax = sns.scatterplot(
     x=x_var,
     y=y_var,
     hue="codec_type",
+    ax=ax,
 )
 ax.scatter(
     benchmarks.loc["pipeline_encode", x_var],
@@ -184,6 +238,9 @@ ax.set_ylim(0, 10)
 ax.set_xlim(0, 10)
 ax.legend()
 ax.spines[["top", "right"]].set_visible(False)
+f.savefig(
+    "/home/galen.lynch/encode-testing/storage_network_tradeoff.png", dpi=300
+)
 # %%
 x_var = "compression_ratio"
 y_var = "vmaf"
@@ -196,40 +253,14 @@ gpu_encodes = benchmarks[
 fast_encodes = benchmarks[benchmarks.index.str.startswith("h264_fast")]
 slow_encodes = benchmarks[benchmarks.index.str.startswith("h264_slow")]
 f, ax = plt.subplots()
+labels = ["GPU", "CPU Fast", "CPU Slow"]
 for i, data in enumerate([gpu_encodes, fast_encodes, slow_encodes]):
-    tufte_style_lineplot(ax, data[x_var], data[y_var], color=f"C{i}")
-
-for i, nickname in enumerate(
-    ["pipeline_encode", "lili_encode", "twostage_encode"]
-):
-
-    tufte_style_scatter(
-        ax,
-        benchmarks.loc[nickname, x_var],
-        benchmarks.loc[nickname, y_var],
-        marker="x",
-        color=f"C{i + 3}",
-        label=nickname,
-        dotsize=40,
+    xs, ys = plot_data_convenience_fun(
+        data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800
     )
+    tufte_style_lineplot(ax, xs, ys, color=f"C{i}", label=labels[i])
 
-ax.spines[["top", "right"]].set_visible(False)
-ax.set_ylim(84, 100)
-ax.spines["left"].set_bounds(85, 100)
-ax.yaxis.set_major_locator(ticker.MultipleLocator(5))
-ax.spines["bottom"].set_bounds(0, 500)
-ax.set_xlabel("Compression ratio")
-ax.set_ylabel("Perceptual quality (VMAF)")
-ax.set_title("Visual loss and compression")
-
-
-# %%
-x_var = "compression_ratio"
-y_var = "fps"
-f, ax = plt.subplots()
-for i, data in enumerate([gpu_encodes, fast_encodes, slow_encodes]):
-    tufte_style_lineplot(ax, data[x_var], data[y_var], color=f"C{i}")
-
+labels = ["Dynamic foraging", "Lili's"]
 for i, nickname in enumerate(["pipeline_encode", "lili_encode"]):
     tufte_style_scatter(
         ax,
@@ -237,11 +268,68 @@ for i, nickname in enumerate(["pipeline_encode", "lili_encode"]):
         benchmarks.loc[nickname, y_var],
         marker="x",
         color=f"C{i + 3}",
-        label=nickname,
+        label=labels[i],
         dotsize=40,
     )
 
-for i, nickname in enumerate(["twostage_encode", "h265_nvenc_constrained"]):
+first_stage = "h264_nvenc_cq_12"
+second_stage = "twostage_encode"
+tufte_style_scatter(
+    ax,
+    benchmarks.loc[first_stage, x_var],
+    benchmarks.loc[first_stage, y_var],
+    marker="^",
+    color=f"C5",
+    dotsize=40,
+    label="First stage",
+)
+tufte_style_scatter(
+    ax,
+    benchmarks.loc[second_stage, x_var],
+    benchmarks.loc[second_stage, y_var],
+    marker="D",
+    color=f"C7",
+    dotsize=40,
+    label="1st + 2nd",
+)
+
+ax.spines[["top", "right"]].set_visible(False)
+ax.set_ylim(81, 100)
+# ax.yaxis.set_major_locator(tck.MultipleLocator(5))
+ax.set_yticks([81, 85, 90, 95, 100])
+ax.yaxis.set_minor_locator(tck.AutoMinorLocator())
+ax.spines["bottom"].set_bounds(0, 600)
+ax.set_xlabel("Compression ratio")
+ax.set_ylabel("Perceptual quality (VMAF)")
+ax.set_title("Visual loss and compression")
+ax.legend()
+f.savefig("/home/galen.lynch/encode-testing/vmaf_vs_compression.png", dpi=300)
+
+# %%
+x_var = "compression_ratio"
+y_var = "fps"
+f, ax = plt.subplots()
+labels = ["GPU", "CPU Fast", "CPU Slow"]
+for i, data in enumerate([gpu_encodes, fast_encodes, slow_encodes]):
+    xs, ys = plot_data_convenience_fun(
+        data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800
+    )
+    tufte_style_lineplot(ax, xs, ys, color=f"C{i}", label=labels[i])
+
+labels = ["Dynamic foraging", "Lili's"]
+for i, nickname in enumerate(["pipeline_encode", "lili_encode"]):
+    tufte_style_scatter(
+        ax,
+        benchmarks.loc[nickname, x_var],
+        benchmarks.loc[nickname, y_var],
+        marker="x",
+        color=f"C{i + 3}",
+        label=labels[i],
+        dotsize=40,
+    )
+labels = ["First stage", "Second stage"]
+first_stage = "h264_nvenc_cq_12"
+for i, nickname in enumerate([first_stage, "twostage_encode"]):
     tufte_style_scatter(
         ax,
         benchmarks.loc[nickname, x_var],
@@ -249,15 +337,28 @@ for i, nickname in enumerate(["twostage_encode", "h265_nvenc_constrained"]):
         marker="^",
         color=f"C{i + 5}",
         dotsize=40,
+        label=labels[i],
     )
+tufte_style_scatter(
+    ax,
+    benchmarks.loc["twostage_encode", x_var],
+    benchmarks.loc[first_stage, y_var],
+    marker="D",
+    color="C7",
+    dotsize=40,
+    label="1st + 2nd",
+)
 ax.spines[["top", "right"]].set_visible(False)
 # ax.set_ylim(84, 100)
 ax.spines["left"].set_bounds(0, 3000)
-ax.yaxis.set_major_locator(ticker.MultipleLocator(500))
-ax.spines["bottom"].set_bounds(0, 500)
+ax.yaxis.set_major_locator(tck.MultipleLocator(500))
+ax.yaxis.set_minor_locator(tck.AutoMinorLocator())
+ax.spines["bottom"].set_bounds(0, 600)
 ax.set_xlabel("Compression ratio")
-ax.set_ylabel("Frames per second (fps)")
-ax.set_title("Performance and compression")
+ax.set_ylabel("Frames per second")
+ax.set_title("Online throughput and compression")
+ax.legend()
+f.savefig("/home/galen.lynch/encode-testing/fps_vs_compression.png", dpi=300)
 
 
 # %%

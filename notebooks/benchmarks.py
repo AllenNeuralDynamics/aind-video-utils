@@ -6,7 +6,7 @@ import copy
 
 # %%
 raw_filename = "/home/galen.lynch/encode-testing/raw/testing_videos/gamma_no-05282024161822-0000.avi"
-first_stage = "/mnt/Data/encodes/hevc_cq_16.mp4"
+first_stage = "/mnt/Data/encodes/stream1.mp4"
 # raw_filename = "/mnt/Data/encodes/lossless_raw.mp4"
 out_filename = "/home/galen.lynch/encode-testing/benchmarks.csv"
 
@@ -136,9 +136,9 @@ twostage_encode_info["encode_str"] = h264_slow_encode_base + crf_str
 twostage_encode_info["nickname"] = "twostage_encode"
 twostage_encode_info["rate_parameter"] = 18
 
-h264_crfs = [16, 18, 20, 22, 24]
-h265_crfs = [18, 20, 22, 24, 26]
-nvenc_cqs = [4, 10, 15, 20, 26, 30]
+h264_crfs = [12, 16, 18, 20, 22, 24]
+h265_crfs = [14, 18, 20, 22, 24, 26]
+nvenc_cqs = [4, 10, 15, 20, 26, 30, 35, 40]
 h264_vmaf_kwargs = dict(format="yuv420p10le", range="full")
 h265_vmaf_kwargs = dict(format="yuv420p10le", range="full")
 
@@ -210,6 +210,62 @@ benchmarks.append(
         raw_bitrate,
     )
 )
+# %%
+for crf in [12, 35, 40]:
+    filled_info = fill_encode_info(h264_nvenc_encode_cq_info, crf)
+    benchmarks.append(
+        run_benchmark(
+            raw_filename,
+            ffmpeg_preamble,
+            filled_info,
+            h264_vmaf_kwargs,
+            raw_bitrate,
+        )
+    )
+    filled_info = fill_encode_info(h265_nvenc_encode_cq_info, crf)
+    benchmarks.append(
+        run_benchmark(
+            raw_filename,
+            ffmpeg_preamble,
+            filled_info,
+            h265_vmaf_kwargs,
+            raw_bitrate,
+        )
+    )
+
+# %%
+for crf in [12]:
+    for encode_info in [
+        h264_fast_encode_info,
+        h264_slow_encode_info,
+    ]:
+        filled_info = fill_encode_info(encode_info, crf)
+        benchmarks.append(
+            run_benchmark(
+                raw_filename,
+                ffmpeg_preamble,
+                filled_info,
+                h264_vmaf_kwargs,
+                raw_bitrate,
+            )
+        )
+
+for crf in [14]:
+    for encode_info in [
+        h265_fast_encode_info,
+        h265_slow_encode_info,
+    ]:
+        filled_info = fill_encode_info(encode_info, crf)
+        benchmarks.append(
+            run_benchmark(
+                raw_filename,
+                ffmpeg_preamble,
+                filled_info,
+                h265_vmaf_kwargs,
+                raw_bitrate,
+            )
+        )
+
 # %%
 for crf in nvenc_cqs:
     filled_info = fill_encode_info(h264_nvenc_encode_cq_info, crf)
@@ -299,3 +355,5 @@ benchmarks.append(
 # %%
 df = pd.DataFrame(data=benchmarks)
 df.to_csv(out_filename, index=False, sep="\t")
+
+# %%
