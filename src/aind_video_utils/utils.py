@@ -1,7 +1,7 @@
 import datetime
 
 
-def get_millisecond_string(seconds):
+def get_millisecond_string(seconds: float) -> str:
     ms = datetime.timedelta(seconds=seconds) / datetime.timedelta(
         milliseconds=1
     )

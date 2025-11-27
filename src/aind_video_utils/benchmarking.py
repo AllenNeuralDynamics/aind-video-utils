@@ -1,36 +1,46 @@
-from . import ffmpeg_utils
-import shlex
-import tempfile
 import re
-import xml.etree.ElementTree as ET
+import shlex
 import subprocess as sp
-import ffmpeg
+import tempfile
+import xml.etree.ElementTree as ET
+from typing import Any
+
+import ffmpeg  # type: ignore[import-untyped]
+
+from . import ffmpeg_utils
+
+EncodeStats = dict[str, float | int]
 
 
-def get_vmaf_score_from_xml(log_filename):
+def get_vmaf_score_from_xml(log_filename: str) -> float:
     tree = ET.parse(log_filename)
     root = tree.getroot()
     pooled_node = root.find("pooled_metrics")
     if pooled_node is None:
         raise ValueError("Could not find pooled_metrics node in VMAF log")
     vmaf_metric = pooled_node.find("metric[@name='vmaf']")
+    if vmaf_metric is None:
+        raise ValueError("Could not find vmaf metric in VMAF log")
     return float(vmaf_metric.attrib["mean"])
 
 
 def get_vmaf_score(
-    raw_filename,
-    distorted_filename,
-    log_filename,
-    range="tv",
-    format="yuv420p10le",
-    n_threads=4,
-):
+    raw_filename: str,
+    distorted_filename: str,
+    log_filename: str,
+    range: str = "tv",
+    format: str = "yuv420p10le",
+    n_threads: int = 4,
+) -> float:
     vmaf_str = (
         f"ffmpeg -i {raw_filename} "
         f"-i {distorted_filename} "
-        f'-lavfi "[0:v]setpts=PTS-STARTPTS,scale=out_range={range},format={format}[reference]; '
-        f"        [1:v]setpts=PTS-STARTPTS,scale=out_range={range},format={format}[distorted]; "
-        f'        [distorted][reference]libvmaf=log_fmt=xml:log_path={log_filename}:n_threads={n_threads}" '
+        f'-lavfi "[0:v]setpts=PTS-STARTPTS,scale=out_range={range},'
+        f"format={format}[reference]; "
+        f"        [1:v]setpts=PTS-STARTPTS,scale=out_range={range},"
+        f"format={format}[distorted]; "
+        f"        [distorted][reference]libvmaf=log_fmt=xml:"
+        f'log_path={log_filename}:n_threads={n_threads}" '
         "-f null -"
     )
     sp.run(
@@ -43,7 +53,7 @@ def get_vmaf_score(
     return get_vmaf_score_from_xml(log_filename)
 
 
-def parse_ffmpeg_output_for_perf_stats(cmd_output):
+def parse_ffmpeg_output_for_perf_stats(cmd_output: str) -> tuple[float, float]:
     outlines = cmd_output.splitlines()
     for lineno in reversed(range(len(outlines))):
         if outlines[lineno].startswith("frame="):
@@ -64,7 +74,9 @@ def parse_ffmpeg_output_for_perf_stats(cmd_output):
     return fps, bitrate_kbs * 1e3
 
 
-def encode_stats(raw_filename, out_filename, preamble, filter_and_encode):
+def encode_stats(
+    raw_filename: str, out_filename: str, preamble: str, filter_and_encode: str
+) -> EncodeStats:
     cmd_parts = shlex.split(
         preamble + f" -i {raw_filename} {filter_and_encode} {out_filename}"
     )
@@ -76,16 +88,22 @@ def encode_stats(raw_filename, out_filename, preamble, filter_and_encode):
 
 
 def encode_stats_and_vmaf(
-    raw_filename,
-    preamble,
-    filter_and_encode,
-    original_filename=None,
-    dir=None,
-    delete=True,
-    vmaf_kwargs={},
-):
+    raw_filename: str,
+    preamble: str,
+    filter_and_encode: str,
+    original_filename: str | None = None,
+    dir: str | None = None,
+    delete: bool = True,
+    vmaf_kwargs: dict[str, Any] | None = None,
+) -> tuple[EncodeStats, str | None, str | None]:
     if original_filename is None:
         original_filename = raw_filename
+    if vmaf_kwargs is None:
+        vmaf_kwargs = {}
+
+    out_filename: str | None
+    log_filename: str | None
+
     with tempfile.NamedTemporaryFile(
         suffix=".mp4", delete=delete, delete_on_close=False, dir=dir
     ) as fp:
