@@ -3,10 +3,10 @@ from aind_video_utils import benchmarking as avbench
 import ffmpeg
 import pandas as pd
 import copy
+import re
 
 # %%
 raw_filename = "/home/galen.lynch/encode-testing/raw/testing_videos/gamma_no-05282024161822-0000.avi"
-first_stage = "/mnt/Data/encodes/stream1.mp4"
 # raw_filename = "/mnt/Data/encodes/lossless_raw.mp4"
 out_filename = "/home/galen.lynch/encode-testing/benchmarks.csv"
 
@@ -190,6 +190,86 @@ def fill_encode_info(encode_info, crf):
     return filled_info
 
 
+def fill_nvenc_encode_info(base_info, cq, preset):
+    """Fill NVENC encoder config with both CQ and preset parameters.
+
+    Parameters
+    ----------
+    base_info : dict
+        Base encoder configuration with encode_str containing '-preset {default}'
+    cq : int
+        CQ (Constant Quality) value to append
+    preset : str
+        NVENC preset to use (e.g., 'p2', 'p3', 'p4')
+
+    Returns
+    -------
+    dict
+        Filled encoder configuration with updated encode_str, nickname, and metadata
+    """
+    filled_info = copy.deepcopy(base_info)
+
+    # Replace preset in encode_str
+    encode_str = filled_info["encode_str"]
+    encode_str = re.sub(r'-preset \w+', f'-preset {preset}', encode_str)
+
+    # Append CQ value (base string ends with '-cq ')
+    encode_str += str(cq)
+
+    # Update all fields
+    filled_info["encode_str"] = encode_str
+    filled_info["nickname"] = f"h264_nvenc_{preset}_cq{cq}"
+    filled_info["rate_parameter"] = cq
+    filled_info["preset"] = preset
+
+    return filled_info
+
+
+def run_benchmark_sweep(
+    raw_filename: str,
+    ffmpeg_preamble: str,
+    encode_info_base: dict,
+    param_values: list,
+    vmaf_kwargs: dict,
+    raw_bitrate: int,
+) -> list[dict]:
+    """Run benchmarks across multiple parameter values (CRF/CQ sweep).
+
+    Parameters
+    ----------
+    raw_filename : str
+        Input video file path
+    ffmpeg_preamble : str
+        FFmpeg command preamble
+    encode_info_base : dict
+        Base encoder configuration (encode_str should end with parameter placeholder)
+    param_values : list
+        List of CRF/CQ values to test
+    vmaf_kwargs : dict
+        VMAF calculation parameters
+    raw_bitrate : int
+        Raw video bitrate for compression ratio calculation
+
+    Returns
+    -------
+    list[dict]
+        List of benchmark result dictionaries
+    """
+    results = []
+    for param in param_values:
+        filled_info = fill_encode_info(encode_info_base, param)
+        results.append(
+            run_benchmark(
+                raw_filename,
+                ffmpeg_preamble,
+                filled_info,
+                vmaf_kwargs,
+                raw_bitrate,
+            )
+        )
+    return results
+
+
 # %%
 benchmarks.append(
     run_benchmark(
@@ -267,27 +347,58 @@ for crf in [14]:
         )
 
 # %%
-for crf in nvenc_cqs:
-    filled_info = fill_encode_info(h264_nvenc_encode_cq_info, crf)
-    benchmarks.append(
-        run_benchmark(
+# Create a dictionary to store first-stage files for two-stage testing
+first_stage_files = {}  # {(cq_value, preset): (filename, benchmark_result)}
+
+# Define presets to test for first-stage encoding
+nvenc_presets = ["p2", "p3", "p4"]  # Medium-range presets for finer granularity
+
+for preset in nvenc_presets:
+    for cq in nvenc_cqs:
+        # H.264 NVENC - preserve for two-stage testing
+        filled_info = fill_nvenc_encode_info(h264_nvenc_encode_cq_info, cq, preset)
+
+        estats, out_file, log_file = avbench.encode_stats_and_vmaf(
             raw_filename,
             ffmpeg_preamble,
-            filled_info,
-            h264_vmaf_kwargs,
-            raw_bitrate,
+            filled_info["encode_str"],
+            vmaf_kwargs=h264_vmaf_kwargs,
+            delete=False,  # Preserve for two-stage testing
         )
-    )
-    filled_info = fill_encode_info(h265_nvenc_encode_cq_info, crf)
-    benchmarks.append(
-        run_benchmark(
-            raw_filename,
-            ffmpeg_preamble,
-            filled_info,
-            h265_vmaf_kwargs,
-            raw_bitrate,
-        )
-    )
+
+        benchmark_result = {
+            "nickname": filled_info["nickname"],
+            "codec": filled_info["codec"],
+            "compute_type": filled_info["compute_type"],
+            "rate_control": filled_info["rate_control"],
+            "rate_parameter": cq,
+            "preset": preset,
+            "bitrate": estats["bitrate"],
+            "fps": estats["fps"],
+            "vmaf": estats["vmaf"],
+            "compression_ratio": raw_bitrate / estats["bitrate"],
+            "encode_str": filled_info["encode_str"],
+            "raw_filename": raw_filename,
+        }
+        benchmarks.append(benchmark_result)
+
+        # Store with (cq, preset) tuple key
+        first_stage_files[(cq, preset)] = (out_file, benchmark_result)
+
+    # H.265 NVENC - keep existing behavior (delete=True, single preset)
+    # Only run once per preset to avoid redundancy
+    if preset == "p4":  # Only test h265 with default preset
+        for cq in nvenc_cqs:
+            filled_info = fill_encode_info(h265_nvenc_encode_cq_info, cq)
+            benchmarks.append(
+                run_benchmark(
+                    raw_filename,
+                    ffmpeg_preamble,
+                    filled_info,
+                    h265_vmaf_kwargs,
+                    raw_bitrate,
+                )
+            )
 benchmarks.append(
     run_benchmark(
         raw_filename,
@@ -308,52 +419,104 @@ benchmarks.append(
 )
 
 # %%
-for crf in h264_crfs:
-    for encode_info in [
-        h264_fast_encode_info,
-        h264_slow_encode_info,
-    ]:
-        filled_info = fill_encode_info(encode_info, crf)
-        benchmarks.append(
-            run_benchmark(
-                raw_filename,
-                ffmpeg_preamble,
-                filled_info,
-                h264_vmaf_kwargs,
-                raw_bitrate,
-            )
+# H.264 CRF sweeps (CPU encoders)
+for encode_info in [h264_fast_encode_info, h264_slow_encode_info]:
+    benchmarks.extend(
+        run_benchmark_sweep(
+            raw_filename,
+            ffmpeg_preamble,
+            encode_info,
+            h264_crfs,
+            h264_vmaf_kwargs,
+            raw_bitrate,
         )
-
-for crf in h265_crfs:
-    for encode_info in [
-        h265_fast_encode_info,
-        h265_slow_encode_info,
-    ]:
-        filled_info = fill_encode_info(encode_info, crf)
-        benchmarks.append(
-            run_benchmark(
-                raw_filename,
-                ffmpeg_preamble,
-                filled_info,
-                h265_vmaf_kwargs,
-                raw_bitrate,
-            )
-        )
-# two stage
-benchmarks.append(
-    run_benchmark(
-        first_stage,
-        ffmpeg_preamble,
-        twostage_encode_info,
-        h264_vmaf_kwargs,
-        raw_bitrate,
-        orig_filename=raw_filename,
     )
-)
+
+# H.265 CRF sweeps (CPU encoders)
+for encode_info in [h265_fast_encode_info, h265_slow_encode_info]:
+    benchmarks.extend(
+        run_benchmark_sweep(
+            raw_filename,
+            ffmpeg_preamble,
+            encode_info,
+            h265_crfs,
+            h265_vmaf_kwargs,
+            raw_bitrate,
+        )
+    )
+# %%
+# Original two-stage example (keep for comparison with new approach)
+# Uses a specific CQ=12, preset=p4 first stage for legacy comparison
+if (12, "p4") in first_stage_files:
+    legacy_first_stage, _ = first_stage_files[(12, "p4")]
+    benchmarks.append(
+        run_benchmark(
+            legacy_first_stage,
+            ffmpeg_preamble,
+            twostage_encode_info,
+            h264_vmaf_kwargs,
+            raw_bitrate,
+            orig_filename=raw_filename,
+        )
+    )
+
+# %%
+# Two-stage encoding: h264_nvenc (various presets/CQ) -> h264_slow (fixed CRF 18)
+# Sweep various preset and CQ combinations for first stage
+
+second_stage_crf = 18  # Fixed second-stage quality
+
+for (first_cq, first_preset), (first_stage_file, first_stage_benchmark) in first_stage_files.items():
+    # Create second-stage config
+    second_stage_info = copy.deepcopy(h264_slow_encode_info)
+    second_stage_info["encode_str"] = h264_slow_encode_base + str(second_stage_crf)
+    second_stage_info["nickname"] = f"twostage_nvenc_{first_preset}_cq{first_cq}_slow_crf{second_stage_crf}"
+    second_stage_info["rate_parameter"] = second_stage_crf
+
+    # Run second-stage benchmark
+    estats, _, _ = avbench.encode_stats_and_vmaf(
+        first_stage_file,  # Input: first-stage output
+        ffmpeg_preamble,
+        second_stage_info["encode_str"],
+        original_filename=raw_filename,  # VMAF against original
+        vmaf_kwargs=h264_vmaf_kwargs,
+    )
+
+    # Record results with two-stage metadata
+    benchmarks.append({
+        "nickname": second_stage_info["nickname"],
+        "codec": second_stage_info["codec"],
+        "compute_type": "CPU",
+        "rate_control": "two_stage",
+        "rate_parameter": second_stage_crf,
+        "preset": second_stage_info["preset"],
+        "bitrate": estats["bitrate"],
+        "fps": estats["fps"],
+        "vmaf": estats["vmaf"],
+        "compression_ratio": raw_bitrate / estats["bitrate"],
+        "encode_str": second_stage_info["encode_str"],
+        "raw_filename": raw_filename,
+        "first_stage_cq": first_cq,
+        "first_stage_preset": first_preset,  # NEW: Track preset
+        "first_stage_codec": "h264_nvenc",
+        "first_stage_bitrate": first_stage_benchmark["bitrate"],
+        "first_stage_vmaf": first_stage_benchmark["vmaf"],
+    })
 
 
 # %%
 df = pd.DataFrame(data=benchmarks)
 df.to_csv(out_filename, index=False, sep="\t")
+
+# %%
+# Cleanup: Remove temporary first-stage files
+import os
+
+for cq, (filepath, _) in first_stage_files.items():
+    try:
+        os.remove(filepath)
+        print(f"Removed temporary file: {filepath}")
+    except OSError as e:
+        print(f"Warning: Could not remove {filepath}: {e}")
 
 # %%
