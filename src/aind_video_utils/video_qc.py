@@ -1,5 +1,8 @@
+import cv2
 import ffmpeg
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 from numpy.typing import NDArray
 
 from aind_video_utils.color_spaces import linear_to_rec_709_trc, luma_range
@@ -9,7 +12,11 @@ from aind_video_utils.ffmpeg_utils import (
     extract_srgb_frame,
     get_video_range_info,
 )
-from aind_video_utils.plotting import luma_comparison_figure
+from aind_video_utils.plotting import (
+    bivariate_with_marginals,
+    imshow_clipping,
+    luma_comparison_figure,
+)
 
 LumaFrame = NDArray[np.uint8] | NDArray[np.uint16]
 sRGBFrame = NDArray[np.uint8]
@@ -32,7 +39,7 @@ def compare_input_output_frames(
     output_video_path: PathLike,
     frame_time: float,
     coerce_input_color_space: bool = False,
-) -> tuple[tuple[LumaFrame, LumaFrame], tuple[sRGBFrame, sRGBFrame]]:
+) -> Figure:
     """Extract and compare frames from input and output videos at a specific time.
 
     Args:
@@ -124,4 +131,39 @@ def compare_input_output_frames(
     )
     ax_bivariate.set_xlabel("Input luma value")
     ax_bivariate.set_ylabel("Output luma value")
+    return fig
+
+
+def compare_luma_opencv_frames(
+    input_video_path: PathLike,
+) -> Figure:
+    vidcap = cv2.VideoCapture(input_video_path)
+    _, image = vidcap.read()
+    opencv_frame = image
+    luma_frame = extract_luma_frame(input_video_path, 0)
+    fig = plt.figure(figsize=(8, 8))
+
+    gs = plt.GridSpec(
+        2,
+        2,
+        figure=fig,
+        width_ratios=[1, 1],
+        height_ratios=[0.75, 1],
+        hspace=0.12,
+        wspace=0.08,
+    )
+    ax_luma = fig.add_subplot(gs[0, 0])
+    ax_opencv = fig.add_subplot(gs[0, 1])
+    ax_biv = fig.add_subplot(gs[1, :])
+    imshow_clipping(opencv_frame[:, :, 0], vmin=0, vmax=255, ax=ax_opencv)
+    ax_opencv.axis("off")
+    imshow_clipping(luma_frame, vmin=0, vmax=255, ax=ax_luma)
+    ax_luma.axis("off")
+    ax_opencv.set_title("OpenCV (full-range)")
+    ax_luma.set_title("Luma (full-range)")
+    _, ax_biv, _, _ = bivariate_with_marginals(
+        luma_frame, opencv_frame[:, :, 0], y_limits=(0, 255), ax=ax_biv
+    )
+    ax_biv.set_ylabel("OpenCV values (full-range)")
+    ax_biv.set_xlabel("Actual luma (full-range)")
     return fig

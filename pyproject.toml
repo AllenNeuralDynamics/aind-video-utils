@@ -15,7 +15,12 @@ classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
 version = "0.1.0"
 
-dependencies = ['ffmpeg-python', 'numpy', 'matplotlib']
+dependencies = [
+    'ffmpeg-python',
+    'numpy',
+    'matplotlib',
+    "opencv-python>=4.13.0.90",
+]
 
 [project.urls]
 Repository = "https://github.com/AllenNeuralDynamics/aind-video-utils/"
