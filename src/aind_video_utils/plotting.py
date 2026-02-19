@@ -118,18 +118,18 @@ def imshow_clipping(
 
 
 class SparseFormatter(Formatter):
-    def __init__(self, base: Formatter, every: int = 2):
+    def __init__(self, base: Formatter, every: int = 2) -> None:
         self.base = base
         self.every = every
 
-    def set_locs(self, locs):
+    def set_locs(self, locs: Any) -> None:
         # Let the base formatter see the tick locations
         if hasattr(self.base, "set_locs"):
             self.base.set_locs(locs)
         # Keep Formatter's own bookkeeping
         super().set_locs(locs)
 
-    def __call__(self, x, pos=None):
+    def __call__(self, x: float, pos: int | None = None) -> str:
         if pos is not None and (pos - 1) % self.every == 0:
             return self.base(x, pos)
         return ""
@@ -279,7 +279,7 @@ def intensity_histogram(
         figsize = (8, 3) if orientation == "horizontal" else (3, 8)
         fig, ax = plt.subplots(figsize=figsize)
     else:
-        fig = ax.figure
+        _ = ax.figure
 
     is_vertical = orientation == "vertical"
     _apply_tufte_style(ax, right_spine=is_vertical, top_spine=False)
@@ -710,8 +710,8 @@ def bivariate_with_marginals(
     return fig, ax_main, ax_top, ax_right
 
 
-def plot_bt709_trc(ax: Axes | None = None):
-    xs = np.linspace(0, 1, 256)
+def plot_bt709_trc(ax: Axes | None = None) -> None:
+    _xs = np.linspace(0, 1, 256)
 
 
 def luma_comparison_figure(

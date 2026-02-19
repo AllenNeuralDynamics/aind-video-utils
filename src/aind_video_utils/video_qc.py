@@ -83,7 +83,7 @@ def compare_input_output_frames(
     )
     y_range = ax_bivariate.get_ylim()
     v_space = 0.02 * (y_range[1] - y_range[0])
-    h_minimum_text = ax_bivariate.text(
+    ax_bivariate.text(
         0.5,
         luma_range_output[0],
         "minimum, standard range",
@@ -94,7 +94,7 @@ def compare_input_output_frames(
         va="bottom",
         transform=ax_bivariate.get_yaxis_transform(),
     )
-    h_maximum_text = ax_bivariate.text(
+    ax_bivariate.text(
         0.5,
         luma_range_output[1] - v_space,
         "maximum, standard range",
@@ -105,11 +105,12 @@ def compare_input_output_frames(
         va="top",
         transform=ax_bivariate.get_yaxis_transform(),
     )
-    bt709_trc_fcn = lambda x: 16 + 219 * linear_to_rec_709_trc(x / 255)
+    def bt709_trc_fcn(x: float) -> float:
+        return 16 + 219 * linear_to_rec_709_trc(x / 255)
     luma_space = np.linspace(0, 255, 256)
     bt709_trc_values = [bt709_trc_fcn(v) for v in luma_space]
     bt709_color = "C2"
-    bt709_h = ax_bivariate.plot(
+    ax_bivariate.plot(
         luma_space,
         bt709_trc_values,
         color=bt709_color,
@@ -118,7 +119,7 @@ def compare_input_output_frames(
         zorder=2,
         label="BT.709 TRC",
     )
-    bt709_label_h = ax_bivariate.text(
+    ax_bivariate.text(
         50,
         120,
         "BT.709 TRC",
