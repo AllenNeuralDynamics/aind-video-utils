@@ -1,3 +1,5 @@
+"""Matplotlib-based visualization for intensity histograms and frame comparisons."""
+
 from typing import Any, Literal
 
 import matplotlib.pyplot as plt
@@ -10,13 +12,39 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.image import AxesImage
 from matplotlib.ticker import Formatter
-from mpl_toolkits.axes_grid1 import make_axes_locatable
+from mpl_toolkits.axes_grid1 import make_axes_locatable  # type: ignore[import-untyped]
 from numpy.typing import ArrayLike, NDArray
+
+__all__ = [
+    "SparseFormatter",
+    "apply_sparse_ticklabels",
+    "bivariate_intensity_histogram",
+    "bivariate_with_marginals",
+    "get_hist_bins",
+    "grayscale_with_clipping_highlights",
+    "imshow_clipping",
+    "intensity_histogram",
+    "luma_comparison_figure",
+    "plot_frame_and_hist",
+    "plot_hist",
+]
 
 
 def get_hist_bins(
     frame: npt.NDArray[np.uint8] | npt.NDArray[np.uint16],
 ) -> range:
+    """Return histogram bin edges appropriate for the frame's dtype.
+
+    Parameters
+    ----------
+    frame : NDArray[np.uint8] | NDArray[np.uint16]
+        Image array. uint8 yields 256 bins; uint16 yields 1024 (10-bit).
+
+    Returns
+    -------
+    range
+        Bin edges for use with ``np.histogram`` or ``ax.hist``.
+    """
     if frame.dtype == "uint8":
         bins = range(2**8 + 1)
     elif frame.dtype == "uint16":
@@ -27,6 +55,20 @@ def get_hist_bins(
 
 
 def plot_hist(ax: Axes, frame: npt.NDArray[np.uint8] | npt.NDArray[np.uint16]) -> Any:
+    """Plot a pixel-intensity histogram on the given axes.
+
+    Parameters
+    ----------
+    ax : Axes
+        Matplotlib axes to draw on.
+    frame : NDArray[np.uint8] | NDArray[np.uint16]
+        Image array whose pixel values are histogrammed.
+
+    Returns
+    -------
+    Any
+        The return value of ``ax.hist``.
+    """
     bins = get_hist_bins(frame)
     return ax.hist(frame.ravel(), bins=bins)
 
@@ -34,6 +76,21 @@ def plot_hist(ax: Axes, frame: npt.NDArray[np.uint8] | npt.NDArray[np.uint16]) -
 def plot_frame_and_hist(
     frame: npt.NDArray[np.uint8] | npt.NDArray[np.uint16],
 ) -> tuple[Figure, npt.NDArray[Any], AxesImage, Any]:
+    """Display a grayscale image above its intensity histogram.
+
+    Parameters
+    ----------
+    frame : NDArray[np.uint8] | NDArray[np.uint16]
+        Grayscale image to visualize.
+
+    Returns
+    -------
+    fig : Figure
+    axs : NDArray
+        Array of two axes (image, histogram).
+    imreturn : AxesImage
+    histreturn : Any
+    """
     f, axs = plt.subplots(
         nrows=2,
         ncols=1,
@@ -94,7 +151,7 @@ def grayscale_with_clipping_highlights(
     rgb[img <= vmin] = underexposed_color
     rgb[img >= vmax] = overexposed_color
 
-    return rgb
+    return rgb  # type: ignore[no-any-return]
 
 
 def imshow_clipping(
@@ -103,7 +160,7 @@ def imshow_clipping(
     vmax: float | None = None,
     cmap: str | Colormap = "gray",
     ax: Axes | None = None,
-    **imshow_kwargs,  # noqa: ANN003
+    **imshow_kwargs: Any,
 ) -> AxesImage:
     """Display grayscale image with blue/red clipping highlights."""
     rgb = grayscale_with_clipping_highlights(image, vmin=vmin, vmax=vmax, cmap=cmap)
@@ -118,6 +175,16 @@ def imshow_clipping(
 
 
 class SparseFormatter(Formatter):
+    """Tick label formatter that shows every *n*-th label and hides the rest.
+
+    Parameters
+    ----------
+    base : Formatter
+        The underlying formatter to delegate label rendering to.
+    every : int
+        Show a label every *every* ticks (default 2 = every other tick).
+    """
+
     def __init__(self, base: Formatter, every: int = 2) -> None:
         self.base = base
         self.every = every
@@ -136,6 +203,15 @@ class SparseFormatter(Formatter):
 
 
 def apply_sparse_ticklabels(axis: Axis, every: int = 2) -> None:
+    """Replace the major tick formatter on *axis* with a sparse version.
+
+    Parameters
+    ----------
+    axis : Axis
+        A matplotlib ``XAxis`` or ``YAxis``.
+    every : int
+        Show a label every *every* ticks.
+    """
     base = axis.get_major_formatter()
     axis.set_major_formatter(SparseFormatter(base, every=every))
 
@@ -176,7 +252,7 @@ def _apply_tufte_style(
         spine.set_linewidth(0.8)
 
 
-def intensity_histogram(
+def intensity_histogram(  # noqa: C901
     image: ArrayLike,
     clip_vmin: float | None = None,
     clip_vmax: float | None = None,
@@ -299,9 +375,7 @@ def intensity_histogram(
                 colors=main_color,
                 linewidth=stem_linewidth,
             )
-        ax.plot(
-            y_data, interior_intensities, "o", color=main_color, markersize=marker_size
-        )
+        ax.plot(y_data, interior_intensities, "o", color=main_color, markersize=marker_size)
         ax.set_ylim(lo - 1, hi + 1)
         if log_scale:
             ax.set_xscale("log")
@@ -321,9 +395,7 @@ def intensity_histogram(
                 colors=main_color,
                 linewidth=stem_linewidth,
             )
-        ax.plot(
-            interior_intensities, y_data, "o", color=main_color, markersize=marker_size
-        )
+        ax.plot(interior_intensities, y_data, "o", color=main_color, markersize=marker_size)
         ax.set_xlim(lo - 1, hi + 1)
         if log_scale:
             ax.set_yscale("log")
@@ -385,7 +457,7 @@ def intensity_histogram(
             else:
                 ax2.set_ylim(bottom=0)
 
-        ax.secondary_ax = ax2
+        ax.secondary_ax = ax2  # type: ignore[attr-defined]
 
     else:
         # Plot extremes on same scale with different colors
@@ -397,20 +469,12 @@ def intensity_histogram(
                 y_val = count if not log_scale else max(count, 0.5)
                 if is_vertical:
                     if show_stems:
-                        ax.hlines(
-                            intensity, 0, y_val, colors=color, linewidth=stem_linewidth
-                        )
-                    ax.plot(
-                        y_val, intensity, "o", color=color, markersize=marker_size * 2
-                    )
+                        ax.hlines(intensity, 0, y_val, colors=color, linewidth=stem_linewidth)
+                    ax.plot(y_val, intensity, "o", color=color, markersize=marker_size * 2)
                 else:
                     if show_stems:
-                        ax.vlines(
-                            intensity, 0, y_val, colors=color, linewidth=stem_linewidth
-                        )
-                    ax.plot(
-                        intensity, y_val, "o", color=color, markersize=marker_size * 2
-                    )
+                        ax.vlines(intensity, 0, y_val, colors=color, linewidth=stem_linewidth)
+                    ax.plot(intensity, y_val, "o", color=color, markersize=marker_size * 2)
 
     # Add clip range indicators
     if clip_vmin is not None:
@@ -514,7 +578,7 @@ def bivariate_intensity_histogram(
     )
 
     # Mask zeros for better visualization
-    hist_masked = np.ma.masked_where(hist == 0, hist)
+    hist_masked = np.ma.masked_where(hist == 0, hist)  # type: ignore[no-untyped-call]
 
     # Plot with imshow (transpose so x=input, y=output)
     if log_scale:
@@ -524,7 +588,7 @@ def bivariate_intensity_histogram(
 
     ax.imshow(
         hist_masked.T,
-        extent=[lo - 0.5, hi + 0.5, lo - 0.5, hi + 0.5],
+        extent=(lo - 0.5, hi + 0.5, lo - 0.5, hi + 0.5),
         origin="lower",
         aspect="equal",
         cmap=cmap,
@@ -534,21 +598,13 @@ def bivariate_intensity_histogram(
 
     # Reference lines for output range limits
     if output_limits is not None:
-        ax.axhline(
-            output_limits[0], color="#2166ac", linestyle="--", linewidth=1, alpha=0.8
-        )
-        ax.axhline(
-            output_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8
-        )
+        ax.axhline(output_limits[0], color="#2166ac", linestyle="--", linewidth=1, alpha=0.8)
+        ax.axhline(output_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8)
 
     # Reference lines for input range limits
     if input_limits is not None:
-        ax.axvline(
-            input_limits[0], color="#2166ac", linestyle="--", linewidth=1, alpha=0.8
-        )
-        ax.axvline(
-            input_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8
-        )
+        ax.axvline(input_limits[0], color="#2166ac", linestyle="--", linewidth=1, alpha=0.8)
+        ax.axvline(input_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8)
 
     if show_identity:
         ax.plot([lo, hi], [lo, hi], color="0.5", linestyle=":", linewidth=1, alpha=0.6)
@@ -647,7 +703,8 @@ def bivariate_with_marginals(
         fig, ax_main = plt.subplots(figsize=figsize)
     else:
         ax_main = ax
-        fig = ax.figure
+        fig = ax.get_figure()  # type: ignore[assignment]
+        assert isinstance(fig, Figure)
 
     # Plot 2D histogram
     bivariate_intensity_histogram(
@@ -668,9 +725,7 @@ def bivariate_with_marginals(
     divider = make_axes_locatable(ax_main)
 
     # Top marginal (x distribution)
-    ax_top = divider.append_axes(
-        "top", size=marginal_size, pad=marginal_pad, sharex=ax_main
-    )
+    ax_top = divider.append_axes("top", size=marginal_size, pad=marginal_pad, sharex=ax_main)
     intensity_histogram(
         x_arr,
         clip_vmin=x_clip[0],
@@ -688,9 +743,7 @@ def bivariate_with_marginals(
     _apply_tufte_style(ax_top)
 
     # Right marginal (y distribution)
-    ax_right = divider.append_axes(
-        "right", size=marginal_size, pad=marginal_pad, sharey=ax_main
-    )
+    ax_right = divider.append_axes("right", size=marginal_size, pad=marginal_pad, sharey=ax_main)
     intensity_histogram(
         y_arr,
         clip_vmin=y_clip[0],
@@ -710,10 +763,6 @@ def bivariate_with_marginals(
     return fig, ax_main, ax_top, ax_right
 
 
-def plot_bt709_trc(ax: Axes | None = None) -> None:
-    _xs = np.linspace(0, 1, 256)
-
-
 def luma_comparison_figure(
     input_luma: ArrayLike,
     output_luma: ArrayLike,
@@ -731,7 +780,7 @@ def luma_comparison_figure(
     figsize: tuple[float, float] = (7, 10),
     log_histograms: bool = False,
     show_stems: bool = False,
-) -> tuple[Figure, Axes, Axes, Axes, Axes, Axes, Axes, GridSpec]:
+) -> tuple[Figure, Axes, Axes, Axes, Axes, Axes, Axes, Axes, GridSpec]:
     """
     Create a comprehensive comparison figure for luma compression analysis.
 
@@ -782,7 +831,12 @@ def luma_comparison_figure(
 
     Returns
     -------
-    Figure
+    fig : Figure
+    ax_input_srgb, ax_output_srgb : Axes
+    ax_input_luma, ax_output_luma : Axes
+    ax_bivariate : Axes
+    ax_top_marginal, ax_right_marginal : Axes
+    gs : GridSpec
     """
     input_luma_arr = np.asarray(input_luma)
     output_luma_arr = np.asarray(output_luma)
@@ -861,20 +915,14 @@ def luma_comparison_figure(
     ax_input_luma = fig.add_subplot(gs[2, 0])
     ax_output_luma = fig.add_subplot(gs[2, 1])
 
-    rgb_input = grayscale_with_clipping_highlights(
-        input_luma_arr, vmin=input_clip[0], vmax=input_clip[1]
-    )
+    rgb_input = grayscale_with_clipping_highlights(input_luma_arr, vmin=input_clip[0], vmax=input_clip[1])
     ax_input_luma.imshow(rgb_input)
     ax_input_luma.set_title(f"Luma (clip: {input_clip[0]}–{input_clip[1]})", fontsize=9)
     ax_input_luma.axis("off")
 
-    rgb_output = grayscale_with_clipping_highlights(
-        output_luma_arr, vmin=output_clip[0], vmax=output_clip[1]
-    )
+    rgb_output = grayscale_with_clipping_highlights(output_luma_arr, vmin=output_clip[0], vmax=output_clip[1])
     ax_output_luma.imshow(rgb_output)
-    ax_output_luma.set_title(
-        f"Luma (clip: {output_clip[0]}–{output_clip[1]})", fontsize=9
-    )
+    ax_output_luma.set_title(f"Luma (clip: {output_clip[0]}–{output_clip[1]})", fontsize=9)
     ax_output_luma.axis("off")
 
     # === Row 4: Bivariate histogram with marginals ===

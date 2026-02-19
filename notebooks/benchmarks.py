@@ -14,12 +14,8 @@ out_filename = "/home/galen.lynch/encode-testing/benchmarks.csv"
 
 ffmpeg_preamble = "ffmpeg -y -hide_banner -hwaccel cuda -colorspace rgb -color_primaries bt709 -color_trc linear"
 
-h264_common_scale = (
-    '-vf "scale=out_range=full:sws_dither=none:out_color_matrix=bt709"'
-)
-h265_common_scale = (
-    '-vf "scale=out_range=full:sws_dither=none:out_color_matrix=bt709"'
-)
+h264_common_scale = '-vf "scale=out_range=full:sws_dither=none:out_color_matrix=bt709"'
+h265_common_scale = '-vf "scale=out_range=full:sws_dither=none:out_color_matrix=bt709"'
 pipeline_encode = f"{h264_common_scale} -vcodec h264_nvenc -pix_fmt yuv420p -crf 23 -preset fast -b:v 50M"
 pipeline_encode_info = {
     "encode_str": pipeline_encode,
@@ -94,7 +90,9 @@ h265_fast_encode_info = {
     "rate_control": "crf",
     "preset": "fast",
 }
-h265_slow_encode_base = f"{h265_common_scale} -c:v libx265 -pix_fmt yuv420p10le -preset veryslow -vsync passthrough -crf "
+h265_slow_encode_base = (
+    f"{h265_common_scale} -c:v libx265 -pix_fmt yuv420p10le -preset veryslow -vsync passthrough -crf "
+)
 h265_slow_encode_info = copy.deepcopy(h265_fast_encode_info)
 h265_slow_encode_info["encode_str"] = h265_slow_encode_base
 h265_slow_encode_info["nickname"] = "h265_slow_crf_"
@@ -211,7 +209,7 @@ def fill_nvenc_encode_info(base_info, cq, preset):
 
     # Replace preset in encode_str
     encode_str = filled_info["encode_str"]
-    encode_str = re.sub(r'-preset \w+', f'-preset {preset}', encode_str)
+    encode_str = re.sub(r"-preset \w+", f"-preset {preset}", encode_str)
 
     # Append CQ value (base string ends with '-cq ')
     encode_str += str(cq)
@@ -483,25 +481,27 @@ for (first_cq, first_preset), (first_stage_file, first_stage_benchmark) in first
     )
 
     # Record results with two-stage metadata
-    benchmarks.append({
-        "nickname": second_stage_info["nickname"],
-        "codec": second_stage_info["codec"],
-        "compute_type": "CPU",
-        "rate_control": "two_stage",
-        "rate_parameter": second_stage_crf,
-        "preset": second_stage_info["preset"],
-        "bitrate": estats["bitrate"],
-        "fps": estats["fps"],
-        "vmaf": estats["vmaf"],
-        "compression_ratio": raw_bitrate / estats["bitrate"],
-        "encode_str": second_stage_info["encode_str"],
-        "raw_filename": raw_filename,
-        "first_stage_cq": first_cq,
-        "first_stage_preset": first_preset,  # NEW: Track preset
-        "first_stage_codec": "h264_nvenc",
-        "first_stage_bitrate": first_stage_benchmark["bitrate"],
-        "first_stage_vmaf": first_stage_benchmark["vmaf"],
-    })
+    benchmarks.append(
+        {
+            "nickname": second_stage_info["nickname"],
+            "codec": second_stage_info["codec"],
+            "compute_type": "CPU",
+            "rate_control": "two_stage",
+            "rate_parameter": second_stage_crf,
+            "preset": second_stage_info["preset"],
+            "bitrate": estats["bitrate"],
+            "fps": estats["fps"],
+            "vmaf": estats["vmaf"],
+            "compression_ratio": raw_bitrate / estats["bitrate"],
+            "encode_str": second_stage_info["encode_str"],
+            "raw_filename": raw_filename,
+            "first_stage_cq": first_cq,
+            "first_stage_preset": first_preset,  # NEW: Track preset
+            "first_stage_codec": "h264_nvenc",
+            "first_stage_bitrate": first_stage_benchmark["bitrate"],
+            "first_stage_vmaf": first_stage_benchmark["vmaf"],
+        }
+    )
 
 
 # %%

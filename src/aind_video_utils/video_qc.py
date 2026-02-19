@@ -1,61 +1,97 @@
+"""QC functions comparing video frames before and after encoding."""
+
+from pathlib import Path
+
 import cv2
-import ffmpeg
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
 from aind_video_utils.color_spaces import linear_to_rec_709_trc, luma_range
-from aind_video_utils.ffmpeg_utils import (
-    PathLike,
-    extract_luma_frame,
-    extract_srgb_frame,
-    get_video_range_info,
-)
+from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
 from aind_video_utils.plotting import (
     bivariate_with_marginals,
     imshow_clipping,
     luma_comparison_figure,
 )
+from aind_video_utils.probe import get_video_range_info, probe
 
 LumaFrame = NDArray[np.uint8] | NDArray[np.uint16]
 sRGBFrame = NDArray[np.uint8]
 
 
 def get_frame_pair_from_video(
-    video_path: str,
+    video_path: str | Path,
     frame_time: float,
     coerce_color_space: bool = False,
 ) -> tuple[LumaFrame, sRGBFrame, int, bool]:
-    probe_json = ffmpeg.probe(video_path)
+    """Extract luma and sRGB frames from a video at a given time.
+
+    Parameters
+    ----------
+    video_path : str | Path
+        Path to the video file.
+    frame_time : float
+        Time in seconds at which to extract the frame.
+    coerce_color_space : bool, optional
+        If True, override the stream's transfer characteristic metadata.
+
+    Returns
+    -------
+    luma : LumaFrame
+        Luma plane.
+    srgb : sRGBFrame
+        sRGB image with shape ``(h, w, 3)``.
+    bit_depth : int
+        Bits per component (8 or 10).
+    is_full_range : bool
+        Whether the video uses full-range (pc) color range.
+    """
+    probe_json = probe(video_path)
     color_range, bit_depth = get_video_range_info(probe_json)
     luma = extract_luma_frame(video_path, frame_time)[0]
     srgb = extract_srgb_frame(video_path, frame_time, coerce_color_space)
     return luma, srgb, bit_depth, color_range == "pc"
 
 
-def compare_input_output_frames(
-    input_video_path: PathLike,
-    output_video_path: PathLike,
+def compare_linear_to_bt709(
+    input_video_path: str | Path,
+    output_video_path: str | Path,
     frame_time: float,
     coerce_input_color_space: bool = False,
 ) -> Figure:
-    """Extract and compare frames from input and output videos at a specific time.
+    """Compare linear-light input against BT.709-encoded output.
 
-    Args:
-        input_video_path (PathLike): Path to the input video file.
-        output_video_path (PathLike): Path to the output video file.
-        frame_time (float): Time in seconds to extract the frames.
-        coerce_input_color_space (bool, optional): Whether to coerce the input video
-            color space to sRGB. Defaults to False.
+    Assumes the input video contains linear light and the output has been
+    encoded with the BT.709 transfer characteristic. The bivariate
+    histogram overlay shows the expected BT.709 TRC curve for reference.
+
+    .. note:: Only 8-bit videos are currently supported.
+
+    Parameters
+    ----------
+    input_video_path : str | Path
+        Path to the linear-light input video.
+    output_video_path : str | Path
+        Path to the BT.709-encoded output video.
+    frame_time : float
+        Time in seconds to extract the frames.
+    coerce_input_color_space : bool, optional
+        Override the input stream's transfer characteristic metadata
+        (assume linear light).
+
+    Returns
+    -------
+    Figure
+        Comparison figure with sRGB frames, luma highlights, and bivariate histogram.
     """
-    luma_input, srgb_input, depth_input, is_full_range_input = (
-        get_frame_pair_from_video(
-            input_video_path, frame_time, coerce_input_color_space
-        )
+    luma_input, srgb_input, depth_input, is_full_range_input = get_frame_pair_from_video(
+        input_video_path, frame_time, coerce_input_color_space
     )
-    luma_output, srgb_output, depth_output, is_full_range_output = (
-        get_frame_pair_from_video(output_video_path, frame_time, False)
+    luma_output, srgb_output, depth_output, is_full_range_output = get_frame_pair_from_video(
+        output_video_path, frame_time, False
     )
     luma_range_input = luma_range(depth_input, is_full_range_input)
     luma_range_output = luma_range(depth_output, is_full_range_output)
@@ -105,8 +141,10 @@ def compare_input_output_frames(
         va="top",
         transform=ax_bivariate.get_yaxis_transform(),
     )
+
     def bt709_trc_fcn(x: float) -> float:
         return 16 + 219 * linear_to_rec_709_trc(x / 255)
+
     luma_space = np.linspace(0, 255, 256)
     bt709_trc_values = [bt709_trc_fcn(v) for v in luma_space]
     bt709_color = "C2"
@@ -137,17 +175,38 @@ def compare_input_output_frames(
 
 
 def compare_luma_opencv_frames(
-    input_video_path: PathLike,
+    input_video_path: str | Path,
+    frame_time: float = 0,
 ) -> Figure:
+    """Compare ffmpeg luma extraction with OpenCV's first-frame decode.
+
+    Produces a figure with the luma and OpenCV frames side-by-side above
+    a bivariate histogram showing how the two sets of values relate.
+
+    .. note:: Only 8-bit videos are currently supported.
+
+    Parameters
+    ----------
+    input_video_path : str | Path
+        Path to the video file.
+    frame_time : float, optional
+        Time in seconds at which to extract the frame.
+
+    Returns
+    -------
+    Figure
+        Comparison figure.
+    """
     vidcap = cv2.VideoCapture(input_video_path)
+    vidcap.set(cv2.CAP_PROP_POS_MSEC, frame_time * 1000)
     _, image = vidcap.read()
     opencv_frame = image
-    luma_frame, color_range, bit_depth = extract_luma_frame(input_video_path, 0)
+    luma_frame, color_range, bit_depth = extract_luma_frame(input_video_path, frame_time)
     is_full_range = color_range == "pc"
     luma_low, luma_high = luma_range(bit_depth, is_full_range)
     fig = plt.figure(figsize=(8, 8))
 
-    gs = plt.GridSpec(
+    gs = GridSpec(
         2,
         2,
         figure=fig,

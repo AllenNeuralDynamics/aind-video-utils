@@ -1,100 +1,116 @@
-# aind-video-utils
+# AIND Video Utils
 
-[![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
-![Code Style](https://img.shields.io/badge/code%20style-black-black)
+![CI](https://github.com/AllenNeuralDynamics/aind-video-utils/actions/workflows/ci-call.yml/badge.svg)
+[![PyPI - Version](https://img.shields.io/pypi/v/aind-video-utils)](https://pypi.org/project/aind-video-utils/)
 [![semantic-release: angular](https://img.shields.io/badge/semantic--release-angular-e10079?logo=semantic-release)](https://github.com/semantic-release/semantic-release)
-![Interrogate](https://img.shields.io/badge/interrogate-100.0%25-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen?logo=codecov)
-![Python](https://img.shields.io/badge/python->=3.7-blue?logo=python)
+[![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
+[![ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border.json)](https://github.com/copier-org/copier)
 
+Tools for working with video files using ffmpeg.
 
+## Prerequisites
 
-## Usage
- - To use this template, click the green `Use this template` button and `Create new repository`.
- - After github initially creates the new repository, please wait an extra minute for the initialization scripts to finish organizing the repo.
- - To enable the automatic semantic version increments: in the repository go to `Settings` and `Collaborators and teams`. Click the green `Add people` button. Add `svc-aindscicomp` as an admin. Modify the file in `.github/workflows/tag_and_publish.yml` and remove the if statement in line 65. The semantic version will now be incremented every time a code is committed into the main branch.
- - To publish to PyPI, enable semantic versioning and uncomment the publish block in `.github/workflows/tag_and_publish.yml`. The code will now be published to PyPI every time the code is committed into the main branch.
- - The `.github/workflows/test_and_lint.yml` file will run automated tests and style checks every time a Pull Request is opened. If the checks are undesired, the `test_and_lint.yml` can be deleted. The strictness of the code coverage level, etc., can be modified by altering the configurations in the `pyproject.toml` file and the `.flake8` file.
+This package requires **ffmpeg** and **ffprobe** to be installed and available on your `PATH`.
+
+- **Linux**: `sudo apt install ffmpeg` (Debian/Ubuntu) or `sudo dnf install ffmpeg` (Fedora)
+- **macOS**: `brew install ffmpeg`
+- **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
 ## Installation
-To use the software, in the root directory, run
+
 ```bash
-pip install -e .
+pip install aind-video-utils
 ```
 
-To develop the code, run
+For QC plotting and visualization features (matplotlib, opencv):
+
 ```bash
-pip install -e .[dev]
+pip install aind-video-utils[plotting]
+```
+
+Or from source:
+
+```bash
+pip install .           # core only
+pip install .[plotting] # with plotting
+```
+
+## Usage
+
+```python
+from aind_video_utils import probe, extract_luma_frame, extract_srgb_frame
+
+# Probe video metadata
+info = probe("video.mp4")
+print(info["streams"][0]["pix_fmt"])  # e.g. "yuv420p", "gbrp"
+
+# Extract luma (Y) plane at t=1.0s
+luma, color_range, bit_depth = extract_luma_frame("video.mp4", 1.0)
+
+# Extract an sRGB frame at t=1.0s
+srgb = extract_srgb_frame("video.mp4", 1.0)
+```
+
+### CLI
+
+With the `plotting` extra installed, the `aind-video-qc` command is available:
+
+```bash
+# Compare linear-light input against BT.709-encoded output
+aind-video-qc linear-to-bt709 input.mp4 output.mp4
+
+# Compare ffmpeg luma extraction with OpenCV decode
+aind-video-qc opencv input.mp4
+
+# Options
+aind-video-qc linear-to-bt709 input.mp4 output.mp4 --frame-time 1.5 --dpi 300 -o qc.png
+```
+
+### Python API
+
+```python
+from aind_video_utils.video_qc import compare_linear_to_bt709
+
+fig = compare_linear_to_bt709("input.mp4", "output.mp4", frame_time=0)
+fig.savefig("qc.png")
+```
+
+To set up for development:
+```bash
+uv sync
+```
+
+## Development
+
+Run the full linting and testing suite:
+
+```bash
+./scripts/run_linters_and_checks.sh -c
+```
+
+Or run individual commands:
+```bash
+uv run --frozen ruff format          # Code formatting
+uv run --frozen ruff check           # Linting
+uv run --frozen mypy                 # Type checking
+uv run --frozen interrogate -v       # Documentation coverage
+uv run --frozen codespell --check-filenames  # Spell checking
+uv run --frozen pytest --cov aind_video_utils # Tests with coverage
 ```
 
 ## Contributing
 
-### Linters and testing
-
-There are several libraries used to run linters, check documentation, and run tests.
-
-- Please test your changes using the **coverage** library, which will run the tests and log a coverage report:
-
-```bash
-coverage run -m unittest discover && coverage report
-```
-
-- Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
-
-```bash
-interrogate .
-```
-
-- Use **flake8** to check that code is up to standards (no unused imports, etc.):
-```bash
-flake8 .
-```
-
-- Use **black** to automatically format the code into PEP standards:
-```bash
-black .
-```
-
-- Use **isort** to automatically sort import statements:
-```bash
-isort .
-```
-
-### Pull requests
-
-For internal members, please create a branch. For external members, please fork the repository and open a pull request from the fork. We'll primarily use [Angular](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit) style for commit messages. Roughly, they should follow the pattern:
+We use [Angular](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit) style commit messages:
 ```text
 <type>(<scope>): <short summary>
 ```
 
-where scope (optional) describes the packages affected by the code changes and type (mandatory) is one of:
+Types: **feat**, **fix**, **docs**, **ci**, **build**, **perf**, **refactor**, **test**
 
-- **build**: Changes that affect build tools or external dependencies (example scopes: pyproject.toml, setup.py)
-- **ci**: Changes to our CI configuration files and scripts (examples: .github/workflows/ci.yml)
-- **docs**: Documentation only changes
-- **feat**: A new feature
-- **fix**: A bugfix
-- **perf**: A code change that improves performance
-- **refactor**: A code change that neither fixes a bug nor adds a feature
-- **test**: Adding missing tests or correcting existing tests
+For internal members, please create a branch. For external members, please fork the repository and open a pull request from the fork.
 
-### Semantic Release
+## License
 
-The table below, from [semantic release](https://github.com/semantic-release/semantic-release), shows which commit message gets you which release type when `semantic-release` runs (using the default configuration):
-
-| Commit message                                                                                                                                                                                   | Release type                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `fix(pencil): stop graphite breaking when too much pressure applied`                                                                                                                             | ~~Patch~~ Fix Release, Default release                                                                          |
-| `feat(pencil): add 'graphiteWidth' option`                                                                                                                                                       | ~~Minor~~ Feature Release                                                                                       |
-| `perf(pencil): remove graphiteWidth option`<br><br>`BREAKING CHANGE: The graphiteWidth option has been removed.`<br>`The default graphite width of 10mm is always used for performance reasons.` | ~~Major~~ Breaking Release <br /> (Note that the `BREAKING CHANGE: ` token must be in the footer of the commit) |
-
-### Documentation
-To generate the rst files source files for documentation, run
-```bash
-sphinx-apidoc -o docs/source/ src
-```
-Then to create the documentation HTML files, run
-```bash
-sphinx-build -b html docs/source/ docs/build/html
-```
-More info on sphinx installation can be found [here](https://www.sphinx-doc.org/en/master/usage/installation.html).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

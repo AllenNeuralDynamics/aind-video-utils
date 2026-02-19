@@ -15,18 +15,14 @@ benchmarks_file = "/home/galen.lynch/encode-testing/benchmarks.csv"
 benchmarks = pd.read_csv(benchmarks_file, sep="\t")
 
 # add a column for codec type (h264 or h265) where it is h264 if the codec is h264_nvenc or libx264
-benchmarks["codec_type"] = np.where(
-    benchmarks["codec"].str.contains("264"), "h264", "h265"
-)
+benchmarks["codec_type"] = np.where(benchmarks["codec"].str.contains("264"), "h264", "h265")
 # %% Set the index to the nickname
 benchmarks.set_index("nickname", inplace=True)
 
 
 # %%
 # Plotting functions
-def tufte_style_lineplot(
-    ax, x, y, color="black", dotsize=20, label=None, **kwargs
-):
+def tufte_style_lineplot(ax, x, y, color="black", dotsize=20, label=None, **kwargs):
     ax.plot(x, y, linestyle="-", color=color, linewidth=1, zorder=1, **kwargs)
     ax.scatter(x, y, color="white", s=100, zorder=2)
     ax.scatter(x, y, color=color, s=dotsize, zorder=3, label=label)
@@ -55,10 +51,7 @@ def plot_data_convenience_fun(xs, ys, clip_lt=None, clip_gt=None):
 
 # %%
 f, ax = plt.subplots()
-seldata = benchmarks[
-    benchmarks.index.str.startswith("h264")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+seldata = benchmarks[benchmarks.index.str.startswith("h264") & ~benchmarks.index.str.endswith("_constrained")]
 x_var = "fps"
 y_var = "vmaf"
 ax = sns.scatterplot(
@@ -69,9 +62,7 @@ ax = sns.scatterplot(
     style="compute_type",
     ax=ax,
 )
-for i, nickname in enumerate(
-    ["pipeline_encode", "lili_encode", "twostage_encode"]
-):
+for i, nickname in enumerate(["pipeline_encode", "lili_encode", "twostage_encode"]):
     ax.scatter(
         benchmarks.loc[nickname, x_var],
         benchmarks.loc[nickname, y_var],
@@ -84,10 +75,7 @@ ax.legend()
 # %%
 # Select data where nickname starts with "h264" but is not "h264_nvenc_constrained"
 f, ax = plt.subplots()
-seldata = benchmarks[
-    benchmarks.index.str.startswith("h264")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+seldata = benchmarks[benchmarks.index.str.startswith("h264") & ~benchmarks.index.str.endswith("_constrained")]
 ax = sns.scatterplot(
     seldata,
     x="compression_ratio",
@@ -96,9 +84,7 @@ ax = sns.scatterplot(
     style="compute_type",
     ax=ax,
 )
-for i, nickname in enumerate(
-    ["pipeline_encode", "lili_encode", "twostage_encode"]
-):
+for i, nickname in enumerate(["pipeline_encode", "lili_encode", "twostage_encode"]):
     ax.scatter(
         benchmarks.loc[nickname, "compression_ratio"],
         benchmarks.loc[nickname, "vmaf"],
@@ -110,10 +96,7 @@ ax.legend()
 
 # %%
 # Select data where nickname starts with "h265" but is not "h265_nvenc_constrained"
-seldata = benchmarks[
-    benchmarks.index.str.startswith("h265")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+seldata = benchmarks[benchmarks.index.str.startswith("h265") & ~benchmarks.index.str.endswith("_constrained")]
 sns.relplot(
     seldata,
     x="compression_ratio",
@@ -123,10 +106,7 @@ sns.relplot(
 )
 
 # %%
-seldata = benchmarks[
-    benchmarks.index.str.startswith("h264_slow")
-    | benchmarks.index.str.startswith("h265_slow")
-]
+seldata = benchmarks[benchmarks.index.str.startswith("h264_slow") | benchmarks.index.str.startswith("h265_slow")]
 sns.relplot(
     seldata,
     x="compression_ratio",
@@ -135,10 +115,7 @@ sns.relplot(
 )
 # %%
 # Select data where the nickname contains "nvenc" and does not end with "constrained"
-seldata = benchmarks[
-    benchmarks.index.str.contains("nvenc")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+seldata = benchmarks[benchmarks.index.str.contains("nvenc") & ~benchmarks.index.str.endswith("_constrained")]
 sns.relplot(
     seldata,
     x="compression_ratio",
@@ -154,12 +131,8 @@ sns.relplot(
 
 # %%
 f, ax = plt.subplots()
-ax = sns.scatterplot(
-    seldata, x="compression_ratio", y="vmaf", hue="codec_type", ax=ax
-)
-for i, nickname in enumerate(
-    ["pipeline_encode", "lili_encode", "twostage_encode"]
-):
+ax = sns.scatterplot(seldata, x="compression_ratio", y="vmaf", hue="codec_type", ax=ax)
+for i, nickname in enumerate(["pipeline_encode", "lili_encode", "twostage_encode"]):
     ax.scatter(
         benchmarks.loc[nickname, "compression_ratio"],
         benchmarks.loc[nickname, "vmaf"],
@@ -196,10 +169,7 @@ ax.scatter(
 ax.legend()
 # %%
 
-seldata = benchmarks[
-    (benchmarks["compute_type"] == "GPU")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+seldata = benchmarks[(benchmarks["compute_type"] == "GPU") & ~benchmarks.index.str.endswith("_constrained")]
 sns.relplot(seldata, x="compression_ratio", y="vmaf", hue="codec")
 # %%
 w = 540
@@ -219,9 +189,7 @@ network_transfer_ratio = data_rate / network_data_transfer_rate
 storage_hours = max_storage / data_rate / 3600 / 2
 
 storage_fn = lambda x: max_storage / x
-network_fn = lambda x: (network_data_transfer_per_hour * 24) / (
-    x + network_data_transfer_per_hour
-)
+network_fn = lambda x: (network_data_transfer_per_hour * 24) / (x + network_data_transfer_per_hour)
 xs = np.linspace(0.01, 10, 100)
 storage_limit = [storage_fn(x * 1e12) for x in xs]
 network_limit = [network_fn(x * 1e12) for x in xs]
@@ -238,26 +206,19 @@ ax.set_ylim(0, 10)
 ax.set_xlim(0, 10)
 ax.legend()
 ax.spines[["top", "right"]].set_visible(False)
-f.savefig(
-    "/home/galen.lynch/encode-testing/storage_network_tradeoff.png", dpi=300
-)
+f.savefig("/home/galen.lynch/encode-testing/storage_network_tradeoff.png", dpi=300)
 # %%
 x_var = "compression_ratio"
 y_var = "vmaf"
 
-gpu_encodes = benchmarks[
-    benchmarks.index.str.startswith("h264_nvenc")
-    & ~benchmarks.index.str.endswith("_constrained")
-]
+gpu_encodes = benchmarks[benchmarks.index.str.startswith("h264_nvenc") & ~benchmarks.index.str.endswith("_constrained")]
 
 fast_encodes = benchmarks[benchmarks.index.str.startswith("h264_fast")]
 slow_encodes = benchmarks[benchmarks.index.str.startswith("h264_slow")]
 f, ax = plt.subplots()
 labels = ["GPU", "CPU Fast", "CPU Slow"]
 for i, data in enumerate([gpu_encodes, fast_encodes, slow_encodes]):
-    xs, ys = plot_data_convenience_fun(
-        data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800
-    )
+    xs, ys = plot_data_convenience_fun(data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800)
     tufte_style_lineplot(ax, xs, ys, color=f"C{i}", label=labels[i])
 
 labels = ["Dynamic foraging", "Lili's"]
@@ -311,9 +272,7 @@ y_var = "fps"
 f, ax = plt.subplots()
 labels = ["GPU", "CPU Fast", "CPU Slow"]
 for i, data in enumerate([gpu_encodes, fast_encodes, slow_encodes]):
-    xs, ys = plot_data_convenience_fun(
-        data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800
-    )
+    xs, ys = plot_data_convenience_fun(data[x_var].to_numpy(), data[y_var].to_numpy(), clip_gt=800)
     tufte_style_lineplot(ax, xs, ys, color=f"C{i}", label=labels[i])
 
 labels = ["Dynamic foraging", "Lili's"]
