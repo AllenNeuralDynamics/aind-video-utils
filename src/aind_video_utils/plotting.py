@@ -457,6 +457,7 @@ def bivariate_intensity_histogram(
     ax: Axes | None = None,
     intensity_range: tuple[int, int] = (0, 255),
     output_limits: tuple[int, int] | None = (16, 235),
+    input_limits: tuple[int, int] | None = None,
     show_identity: bool = True,
     cmap: str = "gray_r",
     log_scale: bool = True,
@@ -475,6 +476,8 @@ def bivariate_intensity_histogram(
         Range for both axes (typically 0-255).
     output_limits
         Reference lines for output range (e.g., bt709 16-235). None to hide.
+    input_limits
+        Reference lines for input range. None to hide.
     show_identity
         Show diagonal identity line.
     cmap
@@ -494,11 +497,11 @@ def bivariate_intensity_histogram(
 
     _apply_tufte_style(ax)
 
-    if output_limits is None:
-        lo, hi = intensity_range
-    else:
-        lo = min(intensity_range[0], output_limits[0])
-        hi = max(intensity_range[1], output_limits[1])
+    lo, hi = intensity_range
+    for limits in (output_limits, input_limits):
+        if limits is not None:
+            lo = min(lo, limits[0])
+            hi = max(hi, limits[1])
 
     # For discrete integer data, bin edges at half-integers ensure each
     # integer value falls into exactly one bin: value v -> bin [v-0.5, v+0.5)
@@ -538,6 +541,15 @@ def bivariate_intensity_histogram(
             output_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8
         )
 
+    # Reference lines for input range limits
+    if input_limits is not None:
+        ax.axvline(
+            input_limits[0], color="#2166ac", linestyle="--", linewidth=1, alpha=0.8
+        )
+        ax.axvline(
+            input_limits[1], color="#b2182b", linestyle="--", linewidth=1, alpha=0.8
+        )
+
     if show_identity:
         ax.plot([lo, hi], [lo, hi], color="0.5", linestyle=":", linewidth=1, alpha=0.6)
 
@@ -555,6 +567,7 @@ def bivariate_with_marginals(
     intensity_range: tuple[int, int] = (0, 255),
     x_clip: tuple[int, int] | None = None,
     y_clip: tuple[int, int] | None = None,
+    x_limits: tuple[int, int] | None = None,
     y_limits: tuple[int, int] | None = (16, 235),
     show_identity: bool = True,
     cmap: str = "gray_r",
@@ -583,7 +596,9 @@ def bivariate_with_marginals(
         Range for both axes (typically 0-255).
     x_clip, y_clip
         Clipping thresholds for marginal histogram highlights.
-        Defaults to intensity_range if None.
+        Defaults to x_limits/y_limits if set, otherwise intensity_range.
+    x_limits
+        Reference lines for x-axis limits. None to hide.
     y_limits
         Reference lines for y-axis limits (e.g., bt709 16-235). None to hide.
     show_identity
@@ -623,7 +638,7 @@ def bivariate_with_marginals(
 
     lo, hi = intensity_range
     if x_clip is None:
-        x_clip = intensity_range
+        x_clip = x_limits if x_limits is not None else intensity_range
     if y_clip is None:
         y_clip = y_limits if y_limits is not None else intensity_range
 
@@ -641,6 +656,7 @@ def bivariate_with_marginals(
         ax=ax_main,
         intensity_range=intensity_range,
         output_limits=y_limits,
+        input_limits=x_limits,
         show_identity=show_identity,
         cmap=cmap,
         log_scale=log_scale,
@@ -706,6 +722,7 @@ def luma_comparison_figure(
     intensity_range: tuple[int, int] = (0, 255),
     input_clip: tuple[int, int] | None = None,
     output_clip: tuple[int, int] = (16, 235),
+    input_limits: tuple[int, int] | None = None,
     input_column_title: str = "Input",
     output_column_title: str = "Output",
     input_srgb_title: str | None = None,
@@ -748,6 +765,8 @@ def luma_comparison_figure(
         Clipping thresholds for input highlights. Defaults to intensity_range.
     output_clip
         Clipping thresholds for output highlights (16-235 for bt709).
+    input_limits
+        Reference lines for input range on bivariate plot. Defaults to input_clip.
     input_column_title, output_column_title
         Column titles displayed above each column.
     input_srgb_title, output_srgb_title
@@ -770,6 +789,8 @@ def luma_comparison_figure(
 
     if input_clip is None:
         input_clip = intensity_range
+    if input_limits is None:
+        input_limits = input_clip
 
     lo, hi = intensity_range
 
@@ -865,6 +886,7 @@ def luma_comparison_figure(
         intensity_range=intensity_range,
         x_clip=input_clip,
         y_clip=output_clip,
+        x_limits=input_limits,
         y_limits=output_clip,
         log_scale=True,
         log_histograms=log_histograms,

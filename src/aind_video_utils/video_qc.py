@@ -29,7 +29,7 @@ def get_frame_pair_from_video(
 ) -> tuple[LumaFrame, sRGBFrame, int, bool]:
     probe_json = ffmpeg.probe(video_path)
     color_range, bit_depth = get_video_range_info(probe_json)
-    luma = extract_luma_frame(video_path, frame_time)
+    luma = extract_luma_frame(video_path, frame_time)[0]
     srgb = extract_srgb_frame(video_path, frame_time, coerce_color_space)
     return luma, srgb, bit_depth, color_range == "pc"
 
@@ -76,6 +76,7 @@ def compare_input_output_frames(
         srgb_output,
         intensity_range=luma_range_input,
         output_clip=luma_range_output,
+        input_limits=luma_range_input,
         input_srgb_title="Frame interpreted as sRGB",
         output_srgb_title="Frame interpreted as sRGB",
         title="Video compression QC",
@@ -140,7 +141,9 @@ def compare_luma_opencv_frames(
     vidcap = cv2.VideoCapture(input_video_path)
     _, image = vidcap.read()
     opencv_frame = image
-    luma_frame = extract_luma_frame(input_video_path, 0)
+    luma_frame, color_range, bit_depth = extract_luma_frame(input_video_path, 0)
+    is_full_range = color_range == "pc"
+    luma_low, luma_high = luma_range(bit_depth, is_full_range)
     fig = plt.figure(figsize=(8, 8))
 
     gs = plt.GridSpec(
@@ -157,13 +160,18 @@ def compare_luma_opencv_frames(
     ax_biv = fig.add_subplot(gs[1, :])
     imshow_clipping(opencv_frame[:, :, 0], vmin=0, vmax=255, ax=ax_opencv)
     ax_opencv.axis("off")
-    imshow_clipping(luma_frame, vmin=0, vmax=255, ax=ax_luma)
+    imshow_clipping(luma_frame, vmin=luma_low, vmax=luma_high, ax=ax_luma)
     ax_luma.axis("off")
+    range_title = "full-range" if is_full_range else "limited-range"
     ax_opencv.set_title("OpenCV (full-range)")
-    ax_luma.set_title("Luma (full-range)")
+    ax_luma.set_title(f"Luma ({range_title})")
     _, ax_biv, _, _ = bivariate_with_marginals(
-        luma_frame, opencv_frame[:, :, 0], y_limits=(0, 255), ax=ax_biv
+        luma_frame,
+        opencv_frame[:, :, 0],
+        x_limits=(luma_low, luma_high),
+        y_limits=None,
+        ax=ax_biv,
     )
     ax_biv.set_ylabel("OpenCV values (full-range)")
-    ax_biv.set_xlabel("Actual luma (full-range)")
+    ax_biv.set_xlabel(f"Actual luma ({range_title})")
     return fig

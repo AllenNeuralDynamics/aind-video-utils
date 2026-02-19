@@ -145,7 +145,7 @@ def extract_srgb_frame(
 
 def extract_luma_frame(
     video_path: PathLike, frame_time: float
-) -> npt.NDArray[np.uint8] | npt.NDArray[np.uint16]:
+) -> tuple[npt.NDArray[np.uint8] | npt.NDArray[np.uint16], str, int]:
     probe_json = ffmpeg.probe(video_path)
     pix_fmt = get_yuv_format(probe_json)
     format_is_8_bit = pix_fmt in _ALL_SUPPORTED_FORMATS_8BIT
@@ -195,7 +195,8 @@ def extract_luma_frame(
         y = luma_from_rawvideo_yuvp420_buff(result.stdout, w, h)
     else:
         y = luma_from_rawvideo_yuv420p10le_buff(result.stdout, w, h)
-    return y
+    color_range, bit_depth = get_video_range_info(probe_json)
+    return y, color_range, bit_depth
 
 
 def capture_ffmpeg_command_output(cmd_parts: list[str]) -> str:
