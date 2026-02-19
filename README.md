@@ -1,12 +1,9 @@
 # AIND Video Utils
 
 ![CI](https://github.com/AllenNeuralDynamics/aind-video-utils/actions/workflows/ci-call.yml/badge.svg)
-[![PyPI - Version](https://img.shields.io/pypi/v/aind-video-utils)](https://pypi.org/project/aind-video-utils/)
-[![semantic-release: angular](https://img.shields.io/badge/semantic--release-angular-e10079?logo=semantic-release)](https://github.com/semantic-release/semantic-release)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen)](LICENSE)
 [![ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Copier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/copier-org/copier/master/img/badge/badge-grayscale-inverted-border.json)](https://github.com/copier-org/copier)
 
 Tools for working with video files using ffmpeg.
 
@@ -20,22 +17,31 @@ This package requires **ffmpeg** and **ffprobe** to be installed and available o
 
 ## Installation
 
-```bash
-pip install aind-video-utils
-```
-
-For QC plotting and visualization features (matplotlib, opencv):
+This package is not published on PyPI. Install from GitHub directly:
 
 ```bash
-pip install aind-video-utils[plotting]
+# uv
+uv add git+https://github.com/AllenNeuralDynamics/aind-video-utils.git
+uv add "aind-video-utils[plotting] @ git+https://github.com/AllenNeuralDynamics/aind-video-utils.git"
+
+# pip
+pip install git+https://github.com/AllenNeuralDynamics/aind-video-utils.git
+pip install "aind-video-utils[plotting] @ git+https://github.com/AllenNeuralDynamics/aind-video-utils.git"
 ```
 
-Or from source:
+Or from a local clone:
 
 ```bash
-pip install .           # core only
-pip install .[plotting] # with plotting
+# uv
+uv add --editable .           # core only
+uv add --editable ".[plotting]" # with plotting
+
+# pip
+pip install -e .           # core only
+pip install -e ".[plotting]" # with plotting
 ```
+
+The `plotting` extra adds matplotlib and opencv, required for QC visualization and the `aind-video-qc` CLI.
 
 ## Usage
 
@@ -53,7 +59,7 @@ luma, color_range, bit_depth = extract_luma_frame("video.mp4", 1.0)
 srgb = extract_srgb_frame("video.mp4", 1.0)
 ```
 
-### CLI
+### QC CLI
 
 With the `plotting` extra installed, the `aind-video-qc` command is available:
 
@@ -68,7 +74,7 @@ aind-video-qc opencv input.mp4
 aind-video-qc linear-to-bt709 input.mp4 output.mp4 --frame-time 1.5 --dpi 300 -o qc.png
 ```
 
-### Python API
+### QC Python API
 
 ```python
 from aind_video_utils.video_qc import compare_linear_to_bt709
@@ -77,32 +83,16 @@ fig = compare_linear_to_bt709("input.mp4", "output.mp4", frame_time=0)
 fig.savefig("qc.png")
 ```
 
-To set up for development:
-```bash
-uv sync
-```
-
 ## Development
 
-Run the full linting and testing suite:
-
 ```bash
-./scripts/run_linters_and_checks.sh -c
-```
-
-Or run individual commands:
-```bash
-uv run --frozen ruff format          # Code formatting
-uv run --frozen ruff check           # Linting
-uv run --frozen mypy                 # Type checking
-uv run --frozen interrogate -v       # Documentation coverage
-uv run --frozen codespell --check-filenames  # Spell checking
-uv run --frozen pytest --cov aind_video_utils # Tests with coverage
+uv sync                              # install all dev dependencies
+./scripts/run_linters_and_checks.sh -c  # run full lint + test suite
 ```
 
 ## Contributing
 
-We use [Angular](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit) style commit messages:
+We use [Conventional Commits](https://www.conventionalcommits.org/):
 ```text
 <type>(<scope>): <short summary>
 ```
