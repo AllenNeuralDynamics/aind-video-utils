@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess as sp
 from pathlib import Path
 from typing import Any
@@ -108,3 +109,56 @@ def get_video_range_info(probe_json: ProbeDict) -> tuple[str, int]:
     color_range = vidstream["color_range"]
     bit_depth = pix_format_bit_depth(pix_fmt)
     return color_range, bit_depth
+
+
+def get_color_transfer(probe_json: ProbeDict) -> str | None:
+    """Return the transfer characteristic from the first video stream.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    str | None
+        Transfer characteristic string (e.g. ``"bt709"``, ``"linear"``),
+        or ``None`` when absent or ``"unknown"``.
+    """
+    color_trc = probe_json["streams"][0].get("color_transfer")
+    if color_trc in (None, "unknown"):
+        return None
+    return str(color_trc)
+
+
+def get_nb_frames(probe_json: ProbeDict) -> int | None:
+    """Return the frame count from the first video stream.
+
+    Tries ``nb_frames`` directly, then falls back to
+    ``duration * r_frame_rate``.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    int | None
+        Total frame count, or ``None`` when unavailable.
+    """
+    stream = probe_json["streams"][0]
+    raw = stream.get("nb_frames")
+    if raw is not None and raw != "N/A":
+        return int(raw)
+
+    if stream.get("duration") and stream.get("r_frame_rate"):
+        try:
+            dur = float(stream["duration"])
+            num, den = stream["r_frame_rate"].split("/")
+            fps = int(num) / int(den)
+            return math.ceil(dur * fps)
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    return None

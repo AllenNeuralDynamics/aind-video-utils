@@ -13,7 +13,7 @@ authors = [
 ]
 classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
-version = "0.2.0"
+version = "0.2.1"
 
 dependencies = [
     "numpy",
@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 plotting = ["matplotlib", "opencv-python>=4.13.0.90"]
+transcode = ["pydantic-settings>=2.4", "rich>=13.0"]
 
 [project.urls]
 Repository = "https://github.com/AllenNeuralDynamics/aind-video-utils/"
@@ -29,10 +30,11 @@ Changelog = "https://github.com/AllenNeuralDynamics/aind-video-utils/blob/main/C
 
 [project.scripts]
 aind-video-qc = "aind_video_utils.scripts.video_qc_cli:main"
+aind-transcode = "aind_video_utils.scripts.transcode_cli:main"
 
 [dependency-groups]
 types = ["mypy"]
-dev = [{ include-group = "types" }, "aind-video-utils[plotting]", "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
+dev = [{ include-group = "types" }, "aind-video-utils[plotting]", "aind-video-utils[transcode]", "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
 jupyter = [{ include-group = "dev" }, "ipykernel", "pip"]
 
 [tool.hatch.build.targets.wheel]
