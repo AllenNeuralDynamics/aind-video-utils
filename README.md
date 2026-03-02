@@ -17,31 +17,22 @@ This package requires **ffmpeg** and **ffprobe** to be installed and available o
 
 ## Installation
 
-This package is not published on PyPI. Install from GitHub directly:
-
 ```bash
 # uv
-uv add git+https://github.com/AllenNeuralDynamics/aind-video-utils.git
-uv add "aind-video-utils[plotting] @ git+https://github.com/AllenNeuralDynamics/aind-video-utils.git"
+uv add aind-video-utils                        # core only
+uv add "aind-video-utils[transcode]"            # with transcode CLI
+uv add "aind-video-utils[plotting]"             # with QC plotting
 
 # pip
-pip install git+https://github.com/AllenNeuralDynamics/aind-video-utils.git
-pip install "aind-video-utils[plotting] @ git+https://github.com/AllenNeuralDynamics/aind-video-utils.git"
+pip install aind-video-utils
+pip install "aind-video-utils[transcode]"
+pip install "aind-video-utils[plotting]"
 ```
 
-Or from a local clone:
-
-```bash
-# uv
-uv add --editable .           # core only
-uv add --editable ".[plotting]" # with plotting
-
-# pip
-pip install -e .           # core only
-pip install -e ".[plotting]" # with plotting
-```
-
-The `plotting` extra adds matplotlib and opencv, required for QC visualization and the `aind-video-qc` CLI.
+| Extra | Adds |
+|-------|------|
+| `transcode` | pydantic-settings, rich — required for `aind-transcode` CLI |
+| `plotting` | matplotlib, opencv — required for `aind-video-qc` CLI |
 
 ## Usage
 
@@ -57,6 +48,86 @@ luma, color_range, bit_depth = extract_luma_frame("video.mp4", 1.0)
 
 # Extract an sRGB frame at t=1.0s
 srgb = extract_srgb_frame("video.mp4", 1.0)
+```
+
+### Encoding Profiles
+
+This package is the canonical Python source for the [AIND behavior video file standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/) encoding profiles. Four profiles are provided as frozen dataclass constants:
+
+| Constant | Codec | Pixel Format | Container | Use Case |
+|----------|-------|-------------|-----------|----------|
+| `OFFLINE_8BIT` | libx264 | yuv420p | mp4 | Long-term storage (default) |
+| `OFFLINE_10BIT` | libx264 | yuv420p10le | mp4 | Long-term storage, 10-bit |
+| `ONLINE_8BIT` | h264_nvenc | yuv420p | mkv | Real-time acquisition |
+| `ONLINE_10BIT` | hevc_nvenc | p010le | mkv | Real-time acquisition, 10-bit |
+
+```python
+from aind_video_utils import OFFLINE_8BIT, ONLINE_8BIT
+
+# Inspect the exact ffmpeg args
+OFFLINE_8BIT.ffmpeg_output_args()
+ONLINE_8BIT.ffmpeg_input_args()
+
+# Customize with replace()
+fast = OFFLINE_8BIT.replace(codec_params=("-preset", "veryfast", "-crf", "18"))
+```
+
+For online acquisition pipelines that build their own ffmpeg command:
+
+```python
+from aind_video_utils import ONLINE_8BIT
+
+profile = ONLINE_8BIT
+cmd = [
+    "ffmpeg",
+    *profile.ffmpeg_input_args(),
+    "-f", "rawvideo", "-pix_fmt", "bgr24",
+    "-s", f"{w}x{h}", "-r", str(fps),
+    "-i", "pipe:0",
+    *profile.ffmpeg_output_args(),
+    str(output_path),
+]
+```
+
+### Transcoding Python API
+
+```python
+from aind_video_utils import transcode_video, OFFLINE_8BIT
+
+# Simplest form — offline 8-bit with automatic colorspace fix
+transcode_video(input_path, output_path)
+
+# Explicit profile
+transcode_video(input_path, output_path, profile=OFFLINE_8BIT)
+
+# Custom profile with speed override
+fast = OFFLINE_8BIT.replace(codec_params=("-preset", "veryfast", "-crf", "18"))
+transcode_video(input_path, output_path, profile=fast)
+
+# Skip automatic setparams probing
+transcode_video(input_path, output_path, auto_fix_colorspace=False)
+```
+
+### Transcode CLI
+
+With the `transcode` extra installed, the `aind-transcode` command is available:
+
+```bash
+aind-transcode videos/                                # defaults: offline-8bit, auto-fix
+aind-transcode videos/ --profile offline-10bit        # explicit profile
+aind-transcode videos/ --preset veryfast              # override speed
+aind-transcode videos/ --crf 20 --preset veryfast     # override quality + speed
+aind-transcode videos/ --no-auto-fix-colorspace       # skip setparams probing
+aind-transcode videos/ --jobs 4                       # parallel workers
+```
+
+Settings can also be stored in `aind-transcode.toml` in the working directory:
+
+```toml
+input = ["videos/"]
+output_dir = "transcoded"
+profile = "offline-8bit"
+overwrite = false
 ```
 
 ### QC CLI
