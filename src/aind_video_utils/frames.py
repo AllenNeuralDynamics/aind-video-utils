@@ -19,6 +19,7 @@ from aind_video_utils._rawvideo import (
     rgb_from_rawvideo_rgb24_buff,
 )
 from aind_video_utils.probe import get_frame_dimensions, get_video_range_info, get_yuv_format, probe
+from aind_video_utils.utils import http_input_flags
 
 
 def extract_srgb_frame(
@@ -67,6 +68,7 @@ def extract_srgb_frame(
         "error",
         "-ss",
         ms_string,
+        *http_input_flags(video_path),
         "-i",
         str(video_path),
         "-vf",
@@ -127,6 +129,7 @@ def extract_luma_frame(
             "-y",
             "-ss",
             ms_string,
+            *http_input_flags(video_path),
             "-i",
             str(video_path),
             "-vf",
@@ -146,6 +149,7 @@ def extract_luma_frame(
             "-y",
             "-ss",
             ms_string,
+            *http_input_flags(video_path),
             "-i",
             str(video_path),
             "-vframes",

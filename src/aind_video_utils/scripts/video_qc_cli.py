@@ -37,10 +37,24 @@ def main() -> None:
     p_opencv.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path.")
     p_opencv.add_argument("--dpi", type=int, default=180, help="Output DPI (default: 180).")
 
+    # -- color-range subcommand --
+    p_color = subparsers.add_parser(
+        "color-range",
+        help="Check if pixel data matches color range metadata.",
+    )
+    p_color.add_argument("input_video", type=Path, help="Path to the input video.")
+    p_color.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
+    p_color.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path.")
+    p_color.add_argument("--dpi", type=int, default=180, help="Output DPI (default: 180).")
+
     args = parser.parse_args()
 
     try:
-        from aind_video_utils.video_qc import compare_linear_to_bt709, compare_luma_opencv_frames
+        from aind_video_utils.video_qc import (
+            check_color_range,
+            compare_linear_to_bt709,
+            compare_luma_opencv_frames,
+        )
     except ImportError:
         print("Error: plotting dependencies not installed. Run: pip install aind-video-utils[plotting]", file=sys.stderr)
         sys.exit(1)
@@ -53,9 +67,15 @@ def main() -> None:
             args.frame_time,
             coerce_input_color_space=args.coerce,
         )
-    else:  # opencv
+    elif args.command == "opencv":
         output_path = args.output or Path(f"{args.input_video.stem}_opencv_qc.png")
         fig = compare_luma_opencv_frames(
+            args.input_video,
+            frame_time=args.frame_time,
+        )
+    else:  # color-range
+        output_path = args.output or Path(f"{args.input_video.stem}_color_range_qc.png")
+        fig = check_color_range(
             args.input_video,
             frame_time=args.frame_time,
         )

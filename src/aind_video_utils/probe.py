@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aind_video_utils._rawvideo import pix_format_bit_depth
+from aind_video_utils.utils import http_input_flags
 
 ProbeDict = dict[str, Any]
 
@@ -34,6 +35,7 @@ def probe(video_path: str | Path) -> ProbeDict:
         "json",
         "-show_format",
         "-show_streams",
+        *http_input_flags(video_path),
         str(video_path),
     ]
     result = sp.run(cmd, capture_output=True, text=True, check=True)
