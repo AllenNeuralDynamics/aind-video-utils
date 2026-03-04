@@ -14,6 +14,7 @@ from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
 from aind_video_utils.plotting import (
     bivariate_with_marginals,
     imshow_clipping,
+    intensity_histogram,
     luma_comparison_figure,
 )
 from aind_video_utils.probe import get_video_range_info, probe
@@ -234,4 +235,109 @@ def compare_luma_opencv_frames(
     )
     ax_biv.set_ylabel("OpenCV values (full-range)")
     ax_biv.set_xlabel(f"Actual luma ({range_title})")
+    return fig
+
+
+def check_color_range(
+    video_path: str | Path,
+    frame_time: float = 0,
+    mismatch_threshold: float = 1.0,
+) -> Figure:
+    """Check whether a video's pixel data matches its color range metadata.
+
+    Produces a figure with two frame interpretations (tagged range vs
+    opposite range) and a histogram showing the luma distribution relative
+    to the limited-range boundaries.
+
+    Parameters
+    ----------
+    video_path : str | Path
+        Path to the video file.
+    frame_time : float, optional
+        Time in seconds at which to extract the frame.
+    mismatch_threshold : float, optional
+        Percentage of pixels outside the tagged range above which the
+        verdict reports a possible mismatch (default 1.0%).
+
+    Returns
+    -------
+    Figure
+        Diagnostic figure.
+    """
+    luma, color_range, bit_depth = extract_luma_frame(video_path, frame_time)
+    is_full_range = color_range == "pc"
+    max_val = (1 << bit_depth) - 1
+
+    tagged_lo, tagged_hi = luma_range(bit_depth, is_full_range)
+    opposite_lo, opposite_hi = luma_range(bit_depth, not is_full_range)
+
+    # Limited-range boundaries (always shown on histogram)
+    limited_lo, limited_hi = luma_range(bit_depth, False)
+
+    # Percentage of pixels outside limited range
+    total = luma.size
+    outside_limited = int(np.sum(luma < limited_lo) + np.sum(luma > limited_hi))
+    pct_outside_limited = 100.0 * outside_limited / total
+
+    tagged_label = "full-range" if is_full_range else "limited-range"
+    opposite_label = "full-range" if not is_full_range else "limited-range"
+
+    if is_full_range:
+        if pct_outside_limited > mismatch_threshold:
+            verdict = f"PASS — {pct_outside_limited:.1f}% outside limited range"
+        else:
+            verdict = "FAIL — no pixels outside limited range"
+    else:
+        if pct_outside_limited > mismatch_threshold:
+            verdict = f"FAIL — {pct_outside_limited:.1f}% outside limited range"
+        else:
+            verdict = "PASS"
+
+    # --- Figure layout ---
+    fig = plt.figure(figsize=(8, 6))
+    gs = GridSpec(
+        2,
+        2,
+        figure=fig,
+        width_ratios=[1, 1],
+        height_ratios=[1, 0.6],
+        hspace=0.30,
+        wspace=0.08,
+    )
+
+    # Top row: two imshow_clipping panels
+    ax_tagged = fig.add_subplot(gs[0, 0])
+    ax_opposite = fig.add_subplot(gs[0, 1])
+
+    imshow_clipping(luma, vmin=tagged_lo, vmax=tagged_hi, ax=ax_tagged)
+    ax_tagged.axis("off")
+    ax_tagged.set_title(
+        f"Metadata says {tagged_label}\nclip @ {tagged_lo}–{tagged_hi}",
+        fontsize=9,
+    )
+
+    imshow_clipping(luma, vmin=opposite_lo, vmax=opposite_hi, ax=ax_opposite)
+    ax_opposite.axis("off")
+    ax_opposite.set_title(
+        f"Interpreted as {opposite_label}\nclip @ {opposite_lo}–{opposite_hi}",
+        fontsize=9,
+    )
+
+    # Bottom: histogram spanning both columns
+    ax_hist = fig.add_subplot(gs[1, :])
+    intensity_histogram(
+        luma,
+        clip_vmin=limited_lo,
+        clip_vmax=limited_hi,
+        intensity_range=(0, max_val),
+        extreme_values=(0, max_val),
+        ax=ax_hist,
+    )
+    ax_hist.set_xlabel("Luma value")
+
+    fig.suptitle(
+        f"Color Range Check: {verdict}",
+        fontsize=11,
+        fontweight="bold",
+    )
     return fig

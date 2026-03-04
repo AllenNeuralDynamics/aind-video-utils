@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aind_video_utils.encoding import OFFLINE_8BIT, EncodingProfile, with_setparams
 from aind_video_utils.probe import get_color_transfer, probe
+from aind_video_utils.utils import http_input_flags
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
     {
@@ -72,6 +73,7 @@ def transcode_video(
             effective = with_setparams(profile)
 
     cmd: list[str] = ["ffmpeg"]
+    cmd.extend(http_input_flags(input_path))
     cmd.extend(effective.ffmpeg_input_args())
     cmd.extend(["-i", str(input_path)])
     cmd.extend(effective.ffmpeg_output_args())
