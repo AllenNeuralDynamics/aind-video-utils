@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
@@ -198,6 +197,8 @@ def compare_luma_opencv_frames(
     Figure
         Comparison figure.
     """
+    import cv2
+
     vidcap = cv2.VideoCapture(input_video_path)
     vidcap.set(cv2.CAP_PROP_POS_MSEC, frame_time * 1000)
     _, image = vidcap.read()
