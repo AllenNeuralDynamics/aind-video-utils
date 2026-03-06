@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-plotting = ["matplotlib", "opencv-python>=4.13.0.90"]
+plotting = ["matplotlib", "opencv-python-headless>=4.13.0.90"]
 transcode = ["pydantic-settings>=2.4", "rich>=13.0"]
 
 [project.urls]
