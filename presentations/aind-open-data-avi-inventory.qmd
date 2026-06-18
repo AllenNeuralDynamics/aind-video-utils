@@ -1,0 +1,378 @@
+---
+title: "AIND open-data behavior videos"
+subtitle: "Benchmark results and spot inspection of video categories"
+author: "Galen Lynch"
+date: today
+format:
+  revealjs:
+    theme: dark
+    slide-number: true
+    incremental: false
+    width: 1280
+    height: 800
+    margin: 0.05
+    embed-resources: false
+    include-in-header:
+      - text: |
+          <style>
+            .video-grid {
+              display: grid;
+              gap: 0.4em;
+              align-items: center;
+              justify-items: center;
+              margin-top: 0.4em;
+            }
+            .video-grid video {
+              width: 100%;
+              max-height: 560px;
+              object-fit: contain;
+              background: #000;
+              border: 1px solid #555;
+            }
+            .video-grid .video-cell {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              width: 100%;
+            }
+            .video-grid .video-cell .label {
+              font-size: 0.65em;
+              color: #ccc;
+              margin-bottom: 0.15em;
+              font-family: monospace;
+            }
+            .big-number {
+              font-size: 2.2em;
+              font-weight: bold;
+              color: #6fcf97;
+            }
+            .stat-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 1.4em 2em;
+              margin: 1.2em 0 1.6em 0;
+            }
+            .stat { display: flex; flex-direction: column; align-items: flex-start; }
+            .stat .num {
+              font-size: 2.4em;
+              font-weight: bold;
+              color: #6fcf97;
+              line-height: 1.05;
+            }
+            .stat .cap {
+              font-size: 0.85em;
+              color: #bbb;
+              margin-top: 0.1em;
+              text-transform: lowercase;
+              letter-spacing: 0.02em;
+            }
+            .ask-block {
+              border-top: 1px solid #444;
+              padding-top: 0.9em;
+              margin-top: 0.6em;
+              font-size: 0.95em;
+              line-height: 1.5;
+            }
+            .ask-block strong { color: #f2c94c; }
+            .small-table table { font-size: 0.7em; }
+            .tiny-table table { font-size: 0.55em; }
+            .project-table table {
+              font-size: 0.48em;
+              table-layout: fixed;
+              width: 100%;
+              line-height: 1.25;
+            }
+            .project-table table th,
+            .project-table table td {
+              word-break: normal;
+              white-space: nowrap;
+              vertical-align: middle;
+              padding: 0.1em 0.3em;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .project-table table th:nth-child(1),
+            .project-table table td:nth-child(1) { width: 30%; }
+            .project-table table th:nth-child(2),
+            .project-table table td:nth-child(2) { width: 10%; text-align: right; }
+            .project-table table th:nth-child(3),
+            .project-table table td:nth-child(3) { width: 60%; }
+          </style>
+    include-after-body:
+      - text: |
+          <script>
+            // Synchronize playback of every .video-grid clip on the active slide.
+            // Pauses everything else so background slides don't compete for decode.
+            function gridVideosOn(slide) {
+              return slide ? Array.from(slide.querySelectorAll('.video-grid video')) : [];
+            }
+            function syncGridVideos(slide) {
+              if (!slide) return;
+              document.querySelectorAll('.video-grid video').forEach(v => v.pause());
+              const vids = gridVideosOn(slide);
+              vids.forEach(v => { v.currentTime = 0; });
+              // Slight delay so seeks resolve before play() to keep them aligned.
+              setTimeout(() => vids.forEach(v => v.play().catch(() => {})), 50);
+            }
+            // Click any grid video to toggle pause/play across the whole grid,
+            // re-syncing to t=0 on resume so the comparison stays aligned.
+            function toggleGrid(slide) {
+              const vids = gridVideosOn(slide);
+              if (!vids.length) return;
+              const anyPlaying = vids.some(v => !v.paused);
+              if (anyPlaying) {
+                vids.forEach(v => v.pause());
+              } else {
+                vids.forEach(v => { v.currentTime = 0; });
+                setTimeout(() => vids.forEach(v => v.play().catch(() => {})), 50);
+              }
+            }
+            function bindGridClick(slide) {
+              gridVideosOn(slide).forEach(v => {
+                if (v.dataset.gridClickBound) return;
+                v.style.cursor = 'pointer';
+                v.addEventListener('click', e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleGrid(slide);
+                });
+                v.dataset.gridClickBound = '1';
+              });
+            }
+            if (window.Reveal) {
+              Reveal.on('ready', e => { bindGridClick(e.currentSlide); syncGridVideos(e.currentSlide); });
+              Reveal.on('slidechanged', e => { bindGridClick(e.currentSlide); syncGridVideos(e.currentSlide); });
+            }
+          </script>
+---
+
+## Recap of backlog
+
+Inventory of `s3://aind-open-data` AVIs
+
+::: {.stat-grid}
+::: {.stat}
+[15,309]{.num}
+[files]{.cap}
+:::
+::: {.stat}
+[231 TB]{.num}
+[on disk]{.cap}
+:::
+::: {.stat}
+[19.14 B]{.num}
+[frames]{.cap}
+:::
+::: {.stat}
+[~14,800 hrs]{.num}
+[of video]{.cap}
+:::
+:::
+
+::: {.ask-block}
+90% of those frames live in **6,936 dynamic foraging videos** that don't meet the current file-standards.
+
+Re-encode to file standards: **~$2 k on EC2**
+:::
+
+## Where the AVIs live (raw only)
+
+| Platform           | Files  |   TB |
+|--------------------|-------:|-----:|
+| behavior           | 10,699 |  221 |
+| ecephys            |    406 |    9 |
+| bare-numeric*      |     68 |    0.3 |
+| SLAP2              |     25 |    0.1 |
+| FIP                |      4 | <0.1 |
+| **Total raw**      | **11,202** | **231** |
+
+::: {.notes}
+Bare-numeric = legacy assets without behavior_/ecephys_ prefix. Not in docdb.
+:::
+
+::: {.smaller}
+*bare-numeric = pre-aind-file-standards asset names. None of these are in docdb.
+:::
+
+## Camera types
+
+::: {.small-table}
+| Camera             | Files | TB  | Where |
+|--------------------|------:|----:|-------|
+| **side**           | 4,555 | 117 | Dynamic foraging |
+| **bottom**         | 4,352 |  97 | Dynamic foraging |
+| **body**           |   761 |  8.5 | Dynamic foraging |
+| **face-eye combo** |   458 |  3.4 | NM subproject 3 |
+| **lickport**       |   458 |  1.4 | NM subproject 3 |
+| **face-bottom**    |   168 |  0.2 | NM subproject 3 |
+| **face-side**      |   158 |  0.1 | NM subproject 3 |
+| **face** (mpeg4)   |   114 |  1.2 | Cell Type LUT + SLAP2 |
+| **eye / pupil**    |   102 |  1.4 | Cell Type LUT + SLAP2 |
+| `video.avi`        |    68 |  0.3 | Bare-numeric, no docdb |
+| AP/ML (not video)  |     8 |  <0.1 | Imaging snapshots, relabel |
+| **Total raw**      | **11,202** | **231** | |
+:::
+
+## Who owns the videos (by project)
+
+::: {.project-table}
+| Project                       | Files | Cameras |
+|-------------------------------|------:|---------|
+| NM sub3 — with photometry     | 5,012 | bottom + side + face-bottom/side (modern) |
+| Genetic Perturbation Platform | 2,214 | bottom + side |
+| NM sub3 — behavior only       | 1,711 | body + face-eye + lickport (older) |
+| Thalamus in the middle (P4)   |   750 | bottom + side |
+| AIND Viral Genetic Tools      |   493 | body + bottom + side |
+| Behavior Platform             |   270 | bottom + side |
+| Cell Type LUT                 |   218 | face + pupil + body (not foraging) |
+| AIBS WB AAV Toolbox           |   145 | body + bottom + side |
+| NM sub1 — NM-neuron ephys     |    92 | (NM-neuron ephys rig) |
+| Striatum                      |    74 | bottom + side |
+| no docdb project              |    70 | bare-numeric `video.avi` files |
+| Ephys Platform                |    65 | bottom + side |
+| MRI-Guided Electrophys.       |    59 | bottom + side |
+| Ophys SLAP2                   |    25 | face + eye + body (not foraging) |
+| Ophys FIP                     |     4 | bottom + side (not foraging) |
+| **Total raw**                 | **11,202** | |
+:::
+
+## Two codec regimes
+
+::: {.columns}
+::: {.column width="50%"}
+**Legacy: h264 / gbrp / 720×540 / 500 fps**
+
+- 6,936 files (62% of raw)
+- 17.32 B frames (90% of all frames)
+- 9,622 hours
+- Lossy h264_nvenc, full-range GBR
+- **This is the transcode target.**
+:::
+::: {.column width="50%"}
+**Legacy: mpeg4 / yuv420p / various**
+
+- 4,266 files (38%)
+- 1.82 B frames (10%)
+- ~5,200 hours
+- 720×540@120 fps NM (older), 800×600@30-60 fps foraging-specialty, 1440×1080@20 fps CellTypeLUT pupil, …
+- Need to look into these videos more.
+:::
+:::
+
+## Where the frames are
+
+::: {.small-table}
+| Group                              | Files | Frames (B) | Hours |
+|------------------------------------|------:|-----------:|------:|
+| h264 gbrp 720×540 @ 500 fps        | 6,936 |    **17.32** | 9,622 |
+| mpeg4 yuv420p 720×540 @ 120 fps    | 3,168 |       1.59  | 3,676 |
+| mpeg4 yuv420p 800×600 @ 60 fps (lickport) | 458 |   0.13  |   618 |
+| mpeg4 yuv420p 800×600 @ 30 fps (face-bottom/face-side) | 311 |    0.02 | 153 |
+| mpeg4 yuv420p 720×540 @ 30 fps     |    94 |       0.04 |   408 |
+| mpeg4 yuv420p 1440×1080 @ 20 fps (pupil) | 93 |        0.01 |   207 |
+| mpeg4 yuv420p 728×544 @ 30 fps     |    64 |       0.01 |    78 |
+| mpeg4 yuv420p 512×512 @ 30 fps     |    26 |     <0.01  |    40 |
+| edge cases (NaN pix_fmt, odd fps)  |    30 |       0.02 |    21 |
+| AP/ML imaging (not probed)         |     8 |       —    |    —  |
+| probe failures (after retry)       |     4 |       —    |    —  |
+| **Total raw**                      | **11,202** | **19.14** | **~14,820** |
+:::
+
+::: {.smaller}
+The 17 B frames in the modern h264_gbrp set are what the cascade re-encode benchmark sized. The mpeg4 set is ~9% by frames; defer or batch alongside.
+:::
+
+## Encoding choice {data-background-color="#111"}
+
+::: {.video-grid style="grid-template-columns: repeat(3, 1fr);"}
+::: {.video-cell}
+::: {.label}
+veryslow / CRF 18
+:::
+<video src="clips/cascade_veryslow_crf18.mp4" muted loop playsinline></video>
+:::
+::: {.video-cell}
+::: {.label}
+slow / CRF 18 — **chosen**
+:::
+<video src="clips/cascade_slow_crf18.mp4" muted loop playsinline></video>
+:::
+::: {.video-cell}
+::: {.label}
+slow / CRF 20
+:::
+<video src="clips/cascade_slow_crf20.mp4" muted loop playsinline></video>
+:::
+:::
+
+## Quality and speed
+
+::: {.small-table}
+| preset       | crf | VMAF      | PSNR-Y    | SSIM-Y     | single-thread fps |
+|--------------|----:|----------:|----------:|-----------:|------------------:|
+| veryslow     | 18  | 80.16     | 32.16     | 0.7652     | 22.3              |
+| **slow**     | **18** | **80.06** | **32.16** | **0.7652** | **58.0**          |
+| slow         | 20  | 79.18     | 32.03     | 0.7610     | 64.3              |
+:::
+
+## Picking an instance family
+
+::: {.small-table}
+| family            | per-vCPU @ full load | 96-vCPU agg. | spot ~$/hr  | est. **$/batch**  |
+|-------------------|---------------------:|-------------:|------------:|------------------:|
+| **c8a** (Zen 5)   | **65 fps**           | **~6,200**   | **$1.55**   | **~$1,290** ⭐    |
+| c7a (Zen 4)       | 46 fps               | ~4,440       | $1.40       | ~$1,630           |
+| c8g (Graviton 4)  | 34 fps               | ~3,280       | $1.10       | ~$1,730           |
+| c8i (Granite Rap.)| 37 fps               | ~3,500       | $1.65       | ~$2,430           |
+:::
+
+::: {.smaller}
+4-family bake-off on c-class .2xlarge, slow/CRF 18, same input file (`side_camera_left.avi`). Each instance fully loaded (n=8 of 8 vCPUs). Spot prices are recent us-west-2 estimates. **c8a wins on throughput AND $/throughput.** Zen 5's wider front-end + AMD's libx264-friendly SMT beat Intel's Granite Rapids (modest gen-over-gen) and Graviton 4's no-SMT model (per-core memory-bandwidth limited).
+:::
+
+## Cost & wallclock
+
+::: {.columns}
+::: {.column width="55%"}
+**c8a.24xlarge spot, slow / CRF 18, 18.6 B frames**
+
+::: {.small-table}
+| fleet           | wallclock | spot cost | notes |
+|-----------------|----------:|----------:|-------|
+| 1× c8a.24xl     | ~35 days  | ~$1,290   | one instance, long tail |
+| 4× c8a.24xl     | ~9 days   | ~$1,290   | recommended ops sweet spot |
+| 8× c8a.24xl     | ~4.5 days | ~$1,290   | tight wallclock, more orchestration |
+:::
+
+Spot cost is essentially constant in compute-hours — fanout trades wallclock for instance count at flat $/batch.
+
+Add ~4% for chunked-encoding overhead (preemption resilience) → **final batch ≈ $1,350**.
+:::
+::: {.column width="45%"}
+**Output footprint**
+
+- Input: ~217 TB (h264_gbrp .avi)
+- Output: **~75 TB** (OFFLINE_8BIT .mp4, ~3× compression)
+- Storage delta: **−142 TB** archival savings
+
+**Preemption resilience**
+
+- ~20-min encode chunks (closed GOP)
+- Atomic manifest (DynamoDB), per-chunk lease
+- Concat with `-c copy` at the end (no re-encode)
+- Lost work per spot kill: bounded to one chunk
+:::
+:::
+
+## Asks
+
+- [ ] **Sign-off** on the transcoding budget (~$3.5 k EC2 spot + storage delta)
+- [ ] **Decision** on the 8 `45_AP_*_ML_*` files: confirm they're imaging (not behavior) and move out of `behavior_videos/`
+- [ ] **Catalog** the 68 bare-numeric `video.avi` assets into docdb so they get the AIND prefix + transcode treatment
+- [ ] **Schedule**: pipeline launch window (manifest + atomic writes + sharding already designed in the cascade-benchmark scratch dir)
+
+## Method
+
+1. **Scan**: walk the weekly **S3 Inventory** for `aind-open-data` (~3.7 k gzipped CSV shards / 377 GB) and grep for `.avi` keys.
+2. **Filter & categorize**: derive platform / camera-type / project from the key and join against docdb.
+3. **Probe**: ffprobe every raw AVI via HTTPS range requests (≈ 1-2 MB per file) → codec, pix_fmt, resolution, fps, frame count, color tags.

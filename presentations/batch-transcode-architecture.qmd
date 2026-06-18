@@ -1,0 +1,813 @@
+---
+title: "Batch transcode pipeline"
+subtitle: "Architecture and orchestration of the AVI → file standard backlog re-encode"
+author: "Galen Lynch"
+date: today
+format:
+  revealjs:
+    theme: dark
+    slide-number: true
+    incremental: false
+    width: 1280
+    height: 800
+    margin: 0.05
+    embed-resources: false
+    include-in-header:
+      - text: |
+          <style>
+            .video-grid {
+              display: grid;
+              gap: 0.4em;
+              align-items: center;
+              justify-items: center;
+              margin-top: 0.4em;
+            }
+            .video-grid video {
+              width: 100%;
+              max-height: 560px;
+              object-fit: contain;
+              background: #000;
+              border: 1px solid #555;
+            }
+            .video-grid .video-cell {
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              width: 100%;
+            }
+            .video-grid .video-cell .label {
+              font-size: 0.65em;
+              color: #ccc;
+              margin-bottom: 0.15em;
+              font-family: monospace;
+            }
+            .big-number {
+              font-size: 2.2em;
+              font-weight: bold;
+              color: #6fcf97;
+            }
+            .stat-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 1.4em 2em;
+              margin: 1.2em 0 1.6em 0;
+            }
+            .stat { display: flex; flex-direction: column; align-items: flex-start; }
+            .stat .num {
+              font-size: 2.4em;
+              font-weight: bold;
+              color: #6fcf97;
+              line-height: 1.05;
+            }
+            .stat .cap {
+              font-size: 0.85em;
+              color: #bbb;
+              margin-top: 0.1em;
+              text-transform: lowercase;
+              letter-spacing: 0.02em;
+            }
+            .ask-block {
+              border-top: 1px solid #444;
+              padding-top: 0.9em;
+              margin-top: 0.6em;
+              font-size: 0.95em;
+              line-height: 1.5;
+            }
+            .ask-block strong { color: #f2c94c; }
+            .small-table table { font-size: 0.7em; }
+            .tiny-table table { font-size: 0.55em; }
+            .arch-callout {
+              border-left: 3px solid #f2c94c;
+              padding: 0.4em 0.8em;
+              margin-top: 0.6em;
+              font-size: 0.9em;
+              background: rgba(242, 201, 76, 0.08);
+            }
+            .arch-callout strong { color: #f2c94c; }
+            pre code.sourceCode { font-size: 0.62em; line-height: 1.25; }
+            .ascii-flow {
+              font-family: monospace;
+              font-size: 0.62em;
+              line-height: 1.25;
+              white-space: pre;
+              background: #1a1a1a;
+              padding: 0.8em;
+              border: 1px solid #444;
+              border-radius: 4px;
+              margin: 0.4em 0;
+              color: #ddd;
+            }
+            .two-col {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 1.2em;
+            }
+            .reveal .columns > .column + .column { margin-left: 2em; }
+            .smaller-block { font-size: 0.75em; line-height: 1.35; }
+            .autosize-table table colgroup col { width: auto !important; }
+          </style>
+    include-after-body:
+      - text: |
+          <script>
+            function gridVideosOn(slide) {
+              return slide ? Array.from(slide.querySelectorAll('.video-grid video')) : [];
+            }
+            function syncGridVideos(slide) {
+              if (!slide) return;
+              document.querySelectorAll('.video-grid video').forEach(v => v.pause());
+              const vids = gridVideosOn(slide);
+              vids.forEach(v => { v.currentTime = 0; });
+              setTimeout(() => vids.forEach(v => v.play().catch(() => {})), 50);
+            }
+            function toggleGrid(slide) {
+              const vids = gridVideosOn(slide);
+              if (!vids.length) return;
+              const anyPlaying = vids.some(v => !v.paused);
+              if (anyPlaying) {
+                vids.forEach(v => v.pause());
+              } else {
+                vids.forEach(v => { v.currentTime = 0; });
+                setTimeout(() => vids.forEach(v => v.play().catch(() => {})), 50);
+              }
+            }
+            function bindGridClick(slide) {
+              gridVideosOn(slide).forEach(v => {
+                if (v.dataset.gridClickBound) return;
+                v.style.cursor = 'pointer';
+                v.addEventListener('click', e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  toggleGrid(slide);
+                });
+                v.dataset.gridClickBound = '1';
+              });
+            }
+            if (window.Reveal) {
+              Reveal.on('ready', e => { bindGridClick(e.currentSlide); syncGridVideos(e.currentSlide); });
+              Reveal.on('slidechanged', e => { bindGridClick(e.currentSlide); syncGridVideos(e.currentSlide); });
+            }
+          </script>
+---
+
+## The problem in one slide
+
+Re-encode all **monochrome** legacy AVIs (h264_nvenc gbrp + mpeg4
+yuv420p) into the
+[OFFLINE_8BIT file standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/).
+
+::: {.stat-grid}
+::: {.stat}
+[~10,840]{.num}
+[mono videos]{.cap}
+:::
+::: {.stat}
+[~228 TB]{.num}
+[source on S3]{.cap}
+:::
+::: {.stat}
+[~19.1 B]{.num}
+[frames]{.cap}
+:::
+::: {.stat}
+[~14,400 hrs]{.num}
+[of video]{.cap}
+:::
+:::
+
+::: {.ask-block}
+That's **97%** of the 11,194-file AVI inventory. This will do three things: 1) put files in a standard color space (BT.709) with correct metadata, 2) reduce storage by ~150 TB, and 3) make the videos directly usable for analysis and consumption without a decode/convert step.
+:::
+
+## Encoder choice {data-background-color="#111"}
+
+::: {.video-grid style="grid-template-columns: repeat(3, 1fr);"}
+::: {.video-cell}
+::: {.label}
+veryslow / CRF 18 (upload reference)
+:::
+<video src="clips/cascade_veryslow_crf18.mp4" muted loop playsinline></video>
+:::
+::: {.video-cell}
+::: {.label}
+slow / CRF 18 — **chosen**
+:::
+<video src="clips/cascade_slow_crf18.mp4" muted loop playsinline></video>
+:::
+::: {.video-cell}
+::: {.label}
+slow / CRF 20
+:::
+<video src="clips/cascade_slow_crf20.mp4" muted loop playsinline></video>
+:::
+:::
+
+
+::: {.small-table}
+| preset       | crf | VMAF      | PSNR-Y    | SSIM-Y     | single-thread fps |
+|--------------|----:|----------:|----------:|-----------:|------------------:|
+| veryslow     | 18  | 80.16     | 32.16     | 0.7652     | 22.3              |
+| **slow**     | **18** | **80.06** | **32.16** | **0.7652** | **58.0**          |
+| slow         | 20  | 79.18     | 32.03     | 0.7610     | 64.3              |
+:::
+
+::: {.arch-callout}
+**slow / CRF 18** sits at the quality knee — same PSNR/SSIM as `veryslow`, 2.6× faster. CRF 20 has lower quality for fast tongue motion.
+:::
+
+## Picking an instance family
+
+::: {.small-table}
+| EC2 family            | per-vCPU<br>FPS         | 96-vCPU<br>agg. FPS | spot<br>\$/hr  | est.<br>**\$/batch**  |
+|-------------------|---------------------:|-----------------:|-------------:|-------------------:|
+| **c8a** (Zen 5)   | **65**               | **~6,200**       | **\$1.55**   | ⭐ **~\$1,290**     |
+| c7a (Zen 4)       | 46                   | ~4,440           | \$1.40       | ~\$1,630           |
+| c8g (Graviton 4)  | 34                   | ~3,280           | \$1.10       | ~\$1,730           |
+| c8i (Granite Rap.)| 37                   | ~3,500           | \$1.65       | ~\$2,430           |
+:::
+
+::: {.smaller}
+Benchmarked on .2xlarge at slow / CRF 18, n=8 of 8 vCPUs.
+
+**Zen 5 wins decisively** — wider front-end and AMD's libx264-friendly SMT
+beat Granite Rapids and Graviton 4's no-SMT model.
+c8g is per-core memory-bandwidth limited at full load.
+:::
+
+## Cost & wallclock
+
+::: {.columns style="gap: 4em;"}
+::: {.column width="45%"}
+**c8a.24xlarge spot, slow / CRF 18, ~19.1 B frames**
+
+::: {.small-table}
+| fleet           | wallclock | spot cost |
+|-----------------|----------:|----------:|
+| 1× c8a.24xl     | ~35 days  | ~\$1,290   |
+| 4× c8a.24xl     | ~9 days   | ~\$1,290   |
+| **8× c8a.24xl** | **~4.5 days** | **~\$1,290** |
+:::
+
+Spot cost is flat in compute-hours. Fanout trades wallclock for instance
+count at constant \$/batch. Add ~4% for orchestration overhead → **~\$1,350**.
+:::
+::: {.column width="45%"}
+**Impact of compression**
+
+- ~228 TB in → **~75 TB** out
+- Storage delta: **−150 TB**
+
+**The catch with spot instances**
+
+- Instances can vanish at ~2-min notice.
+- At this scale, that *will* happen.
+- Architecture absorbs it (next slides).
+:::
+:::
+
+## The pipeline at a glance
+
+```{mermaid}
+%%| fig-width: 11
+flowchart LR
+    INV["S3 inventory CSV"] --> PB["pre-batch checks"]
+    PB --> MAN["manifest.jsonl"]
+    PB --> Q[("SQS work queue")]
+    Q -- "lease one msg" --> W["worker pool"]
+    SRC["S3 source AVIs"] -.HTTPS.-> W
+    W --> CHUNKS["S3 transcoded chunks"]
+    CHUNKS --> CONCAT["Concatenation"]
+    CONCAT --> FINAL["final MP4s on S3"]
+```
+
+::: {.arch-callout}
+One source video → one SQS message → one worker → many chunks on S3. Concat
+runs once the queue is empty and glues chunks into a final MP4
+without re-encoding.
+:::
+
+## Vocabulary
+
+::: {.small-table}
+| term | definition |
+|-------|------------|
+| **Manifest** | JSONL list of `(source URL, output paths, expected frames)` — the ground truth for what to encode. |
+| **SQS** | AWS **Simple Queue Service**. A managed distributed queue. We push one **message** per source video; workers `ReceiveMessage` to claim one, `DeleteMessage` on success. |
+| **Lease** | When a worker receives a message, SQS hides it from other workers for a timeout (here: 7,200 s). If the worker doesn't delete it in time, the message becomes visible again and another worker can claim it. |
+| **Worker** | One process per vCPU on a c8a node. Encodes one source video at a time. |
+| **Chunk** | ~2 min of encoded output (60,000 frames) as its own MKV, uploaded to S3 mid-encode. |
+| **Canonical marker** | A tiny JSON in S3 that promotes a staged chunk into "officially part of the timeline." |
+| **Concat** | Final pass that glues canonical chunks into one MP4 with `-c copy` (no re-encode). |
+:::
+
+## Bounding lost work
+
+If something kills a worker mid-encode, we want **everything already done to stay done**.
+
+::: {.small-table .autosize-table}
+| mechanism | role |
+|---|---|
+| **Chunks (vs one big output)** | Commit partial progress to S3 every ~20 min wallclock. Worst-case lost work = one chunk's CPU, not the whole video. |
+| **Concat as a separate phase** | Workers just upload chunks. Final MP4 built later from canonical markers via `ffmpeg -c copy` — no re-encode, re-runnable. |
+:::
+
+::: {.smaller-block}
+A failure event hits the whole VM (96 workers at once), not one worker. Worst-case lost work scales accordingly:<br>
+**Clean preempt** (2-min notice): all 96 ffmpegs flush → uploads drain → lost work ≈ 0.<br>
+**Hard VM death** (OOM, kernel panic, network partition): all 96 in-flight chunks vanish → lost work ≤ 96 chunks.
+:::
+
+## Preventing writer races {.smaller}
+
+SQS is **at-least-once**. Under rare conditions, two workers can hold the same message and both be actively encoding:
+
+::: {.smaller}
+- Heartbeat call failed silently and the lease expired
+- SQS itself delivered the message twice (documented behavior)
+- Worker A is stuck but not dead; B grabs the now-visible message
+:::
+
+::: {.autosize-table}
+| mechanism | role |
+|---|---|
+| **Canonical markers (atomic create)** | One marker wins per chunk index. `IfNoneMatch:"*"` is atomic; the loser raises a conflict and bails. |
+| **Markers, not S3 listings, define the timeline** | Two workers can produce `chunk_00042.mkv` in their own staging paths without colliding. The marker is what makes one of them "official". |
+:::
+
+::: {.arch-callout}
+**Multiple levels of race protection.** SQS *tries* to ensure one worker per message; canonical markers enforce one writer per chunk index regardless of what SQS does.
+:::
+
+## Keeping work flowing
+
+::: {.small-table .autosize-table}
+| mechanism | role |
+|---|---|
+| **SQS queue with leases** | Distributes work + retries failures. Soft "this message is mine" claim, no separate coordinator. |
+| **Lease heartbeat** | `ChangeMessageVisibility` every 5 min — encodes longer than the default 2 hr lease keep their claim alive. |
+| **Fail-closed on lease loss** | If we can't prove we still own the message, kill ffmpeg. Marker races are *handled*; not creating them is cheaper. |
+| **DLQ (Dead-Letter Queue)** | After 4 receives, SQS sets the message aside — prevents corrupt sources from cycling forever. |
+:::
+
+## Preemption rate & cost {.smaller}
+
+[AWS Spot Instance Advisor](https://aws.amazon.com/ec2/spot/instance-advisor/) reports interrupt rates as **monthly probability per running instance**. For our chosen sizes:
+
+- **c8a.48xlarge** — 5-10%/month
+- **c8a.24xlarge** — 10-15%/month
+- (we exclude c8a.16xl, c8a.12xl — both in the >20% bucket)
+
+::: {.two-col}
+::: {}
+**Fleet preempt math** (e.g. 4× c8a.24xl + 1× c8a.48xl × 4.5 days)
+
+- ~24 instance-days of runtime ≈ 0.8 instance-months
+- Effective ~7-12% monthly rate across the mix → **~0.05-0.10 expected preempts** over the batch
+- A VM kill takes all 96-192 workers on it down at once
+- Each worker loses ≤1 in-flight chunk = ~0.25 vCPU-hr
+- **Worst case (all preempts drain-fail, all-192-vCPU node hit):** 0.1 × 192 × 0.25 ≈ **5 vCPU-hr** out of ~82,000 → **&lt;0.01%**
+- Realistic case (clean preempt with 2-min notice → drain succeeds): **≈ 0**
+:::
+::: {}
+**Why this matters**
+
+- We don't need to over-build for preempts — the architecture absorbs them.
+- `Type: maintain` replaces preempted instances within minutes.
+- The redrive limit (DLQ at 4 attempts) catches stuck messages without bias toward retry storms.
+- Spot premium vs on-demand for c8a.24xl: **~70% discount** (\$1.55 vs \$5.27/hr).
+:::
+:::
+
+::: {.arch-callout}
+**The expensive failure isn't preempts — it's a silent wrong-result.** That's
+why the architecture spends correctness budget on canonical/staging,
+contiguous markers, and fail-closed lease loss, rather than minimizing
+chunk size or hedging duplicate encodes.
+:::
+
+## Inner loop — single-source encode
+
+One ffmpeg per source video. The segment muxer splits output on natural
+IDRs, no `-ss` seek, no per-chunk decode-from-zero.
+
+```bash
+ffmpeg -i s3-source.avi \
+  -vf "select=gte(n,FRAME_START),setpts=N/FPS/TB,$OFFLINE_8BIT_FILTERS" \
+  -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p \
+  -color_trc bt709 -colorspace bt709 -color_primaries bt709 \
+  -f segment -segment_time $(( CHUNK_FRAMES / FPS )) \
+  -reset_timestamps 1 -segment_format mkv \
+  -segment_start_number START_K \
+  -segment_list segments.csv -segment_list_type csv \
+  -threads 1 \
+  chunk_%05d.mkv
+```
+
+::: {.arch-callout}
+**Frame-index, not time.** `select=gte(n, FRAME_START)` drops frames before
+the encoder. `setpts=N/FPS/TB` synthesizes fresh PTS so source PTS jitter
+can't propagate. **No `-ss`** — input-side seek in our AVIs skips 5-7
+frames past the target (verified via framemd5).
+:::
+
+## Inner loop — chunk lifecycle {.smaller .scrollable}
+
+Sidecar tails `segments.csv` while ffmpeg runs and uploads each chunk as it
+closes.
+
+```{mermaid}
+%%| fig-width: 11
+%%| fig-height: 4.5
+%%{init: {'sequence': {'actorFontSize': 12, 'noteFontSize': 11, 'messageFontSize': 11, 'boxMargin': 6, 'boxTextMargin': 4, 'noteMargin': 6, 'messageMargin': 28}}}%%
+sequenceDiagram
+    autonumber
+    participant FF as ffmpeg (segment muxer)
+    participant SC as sidecar thread
+    participant S3 as S3
+    FF->>SC: segments.csv row appended (chunk_00042.mkv)
+    SC->>SC: rename → chunk_00042_n60123.mkv
+    SC->>S3: PUT staging/.../chunk_00042_n60123.mkv
+    S3-->>SC: 200 OK
+    SC->>S3: PUT canonical/chunk_00042.json (IfNoneMatch:"*")
+    alt first writer wins
+        S3-->>SC: 200 OK — promoted
+    else losing worker
+        S3-->>SC: 412 PreconditionFailed
+        SC->>SC: raise CanonicalPromotionConflict
+    end
+```
+
+::: {.arch-callout}
+**Staging is attempt-scoped, canonical is global.** A late upload from a
+losing worker can't enter the timeline. Resume + concat read only canonical
+markers; staging is opaque to them.
+:::
+
+## Inner loop — resume {.smaller}
+
+Worker boot: LIST `canonical/`, derive resume state from markers only.
+
+::: {.two-col}
+::: {}
+**Marker JSON**
+
+```json
+{
+  "k": 42,
+  "n_frames": 60123,
+  "staged_key": "staging/.../chunk_00042_n60123.mkv",
+  "attempt_id": "i-0abc.../1718...",
+  "uploaded_at": "2026-06-17T..."
+}
+```
+:::
+::: {}
+**Gap-free by construction**
+
+Canonical markers are always a contiguous run `0..K-1`. The sidecar's `_promote_ready` only writes marker `N+1` after marker `N` is in place — never skips. If resume ever sees a gap, it **refuses** rather than guessing what should fill it.
+
+**Resume state from markers:**
+
+- `K = max(k) + 1`
+- `frame_start = Σ n_frames`
+- next ffmpeg picks up with `select=gte(n, frame_start)`
+:::
+:::
+
+::: {.arch-callout}
+`IfNoneMatch:"*"` handles a **separate** concern from contiguity above. Contiguity (no gaps) comes from the sidecar's strictly sequential promotion. Coherence (one writer per slot) is what the atomic claim adds: the loser's PUT returns 412, its sidecar bails immediately, and SQS redrives the message. Without the atomic guarantee, both PUTs would silently succeed (last-write-wins), the loser would keep racing on every subsequent slot, and the marker's `staged_key` would flip unpredictably between attempts.
+:::
+
+## Sizing the chunks {.smaller}
+
+`CHUNK_FRAMES_NOMINAL = 60,000` ≡ **120 s of source @ 500 fps**
+
+::: {.two-col}
+::: {}
+**What changes with chunk size**
+
+| chunk    | wallclock (encode + upload) | PUTs / worker / hr | lost work / preempt |
+|----------|----------------------------:|-------------------:|--------------------:|
+| 6 k (12 s) | ~2 min                     | ~30                | ≤2 min              |
+| 30 k (60 s)| ~9 min                     | ~7                 | ≤9 min              |
+| **60 k (120 s)** | **~20 min**          | **~3**             | **≤20 min**         |
+| 300 k (10 min) | ~80 min                | ~0.7               | ≤80 min             |
+:::
+::: {}
+**Why 60,000**
+
+- libx264 default `keyint=250` produces IDRs every 0.5 s; the segment muxer cuts at the **next IDR** after each `segment_time` boundary → real chunks vary by ≤0.5 s, well under nominal.
+- ~3 S3 PUTs / worker / hr × 96 workers = ~290 PUTs/hr — well below S3's 3,500-write/s prefix limit.
+- Lost-work expectation per preempt fits inside one spot-warning window (~120 s).
+- Marker overhead (one ~400 B JSON per chunk) amortizes nicely across ~30,000 total markers.
+
+**No `force_key_frames`** — relying on the natural IDR cadence saves ~0.5% bitrate vs. rigid segment boundaries.
+:::
+:::
+
+## Where the bytes flow {.smaller}
+
+Source AVIs are streamed straight from S3 to ffmpeg — **no local staging**.
+
+::: {.small-table}
+| layer                                | throughput / cost                          | role this batch |
+|--------------------------------------|--------------------------------------------|-----------------|
+| **S3 GET, intra-region**             | ~10 GB/s per bucket, **\$0 egress**         | source AVIs (one stream per worker) |
+| c8a.24xl network (sustained)         | ~12.5 Gbps                                 | covers ~250× worker bandwidth |
+| **EBS gp3 root (default)**           | 125 MB/s base, 250 MB/s burst              | OS + ffmpeg binary only |
+| **Instance-store NVMe**              | not provisioned on c8a (CPU-optimized)     | n/a |
+| S3 PUT (chunks + markers)            | ~3,500 writes/s/prefix                     | upload path; per-worker bound |
+:::
+
+::: {.two-col}
+::: {}
+**Source-side budget**
+
+- Per file: ~47 Mbps ≈ **5.9 MB/s**
+- 96 workers/instance × 5.9 = ~**565 MB/s = 4.5 Gbps**
+- Well under the 12.5 Gbps sustained network ceiling.
+- `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 30` covers transient TCP blips without re-decoding from frame 0.
+:::
+::: {}
+**Why we don't stage to EBS**
+
+- gp3 baseline 125 MB/s → ~4× **slower** than aggregate S3 GET to RAM.
+- Extra round-trip (S3 → EBS → ffmpeg) + ~\$0.08/GB-mo storage.
+- Intra-region S3 GET is free in dollars and nearly free in latency.
+- HTTPS-direct was validated in `test_s3_direct.py`: bit-identical output, no measurable throughput penalty.
+:::
+:::
+
+## Worker loop {.scrollable}
+
+```{mermaid}
+%%| fig-width: 11
+flowchart TD
+    R["ReceiveMessage"] --> RS["get_resume_state"]
+    RS -- "already complete" --> ACK_EARLY["DeleteMessage → loop"]
+    RS -- "work remains" --> RUN["build_encode_cmd → spawn ffmpeg"]
+    RUN --> HB["ChangeMessageVisibility(2hr)<br>& lease heartbeat (300s)"]
+    RUN --> SC["Sidecar thread:<br>stage + canonical PUT"]
+    RUN --> SIG["SIGUSR1 handler:<br>set preempt flag, SIGTERM ffmpeg"]
+    HB --> EXIT["ffmpeg exits"]
+    SC --> EXIT
+    SIG --> EXIT
+    EXIT --> DRAIN["sidecar drain (≤ 600s):<br>promote final chunks"]
+    DRAIN -- "success" --> OK["DeleteMessage"]
+    DRAIN -- "preempted" --> PRE["SetVisibility(0)"]
+    DRAIN -- "failed" --> FAIL["raise → release lease"]
+```
+
+## Worker — concurrency safety {.smaller}
+
+::: {.two-col}
+::: {}
+**`_WorkerState` with `RLock`**
+
+- `current_receipt` (mutated across receive/delete)
+- `ffmpeg_proc` (mutated by main, read by SIGUSR1 & heartbeat)
+- `preempting` flag
+
+All transitions through helpers:
+`set_receipt`, `clear_receipt`,
+`set_ffmpeg_proc`, `request_ffmpeg_terminate`,
+`snapshot_for_extension`.
+:::
+::: {}
+**Races that we close**
+
+- `Popen` → `set_ffmpeg_proc` window: re-check `preempting` under lock after registration.
+- Heartbeat reading half-cleared receipt: snapshot under lock.
+- Already-complete ack: snapshot receipt **before** delete, clear **after** success.
+- Lease-extender failure: ffmpeg SIGTERM, fail attempt, **don't** keep writing.
+:::
+:::
+
+::: {.arch-callout}
+**Fail-closed on lease loss.** If we can't prove we still own the message,
+we stop writing. Better to redo one video than risk two workers racing on
+canonical promotion.
+:::
+
+## SQS orchestration — pre-batch
+
+CSV inventory → one SQS message per (`video_id`, `camera`).
+
+```{mermaid}
+%%| fig-width: 11
+flowchart LR
+    CSV["avi_real.csv (asset_id, camera, s3_url, ...)"] --> FILT["filter: codec / pix_fmt / width"]
+    FILT --> CC["collision check:<br>source_s3, output_chunks_prefix,<br>output_final_s3"]
+    CC --> M["manifest.jsonl (uploaded for audit)"]
+    CC --> SQS["SendMessageBatch ×10 → SQS work queue"]
+    CC --> EV["status/events/...queued.jsonl"]
+```
+
+## SQS orchestration — message shape
+
+```json
+{
+  "video_id": "asset-1",
+  "camera": "side",
+  "source_https": "https://aind-open-data.s3.us-west-2.amazonaws.com/.../side.avi",
+  "source_s3":    "s3://aind-open-data/.../side.avi",
+  "output_chunks_prefix": "s3://aind-encoded-data/encoded/v1/chunks/aind-open-data/.../side/",
+  "output_final_s3":      "s3://aind-encoded-data/encoded/v1/final/aind-open-data/.../side.mp4",
+  "fps": 500.0,
+  "expected_frames": 2520000,
+  "chunk_frames": 60000
+}
+```
+
+::: {.arch-callout}
+**Output paths are manifest-owned, not derived.** Source-mirrored layout
+(`urllib.parse.quote()` on the source S3 key) so the audit trail
+round-trips back to the source bucket — no `video_id`/camera collisions
+across projects.
+:::
+
+## SQS orchestration — queue topology
+
+```{mermaid}
+%%| fig-width: 11
+flowchart LR
+    subgraph WQ["Work queue: vis=7200s, long-poll=20s"]
+        direction TB
+        QM["message"]
+    end
+    W["Worker × N"]
+    DLQ["DLQ (maxReceiveCount=4)"]
+    QM -- "ReceiveMessage" --> W
+    W -- "DeleteMessage (success)" --> QM
+    W -- "ChangeMessageVisibility(7200) every 300s" --> QM
+    W -- "ChangeMessageVisibility(0) on preempt drain" --> QM
+    QM -- "after 4 receives" --> DLQ
+```
+
+::: {.arch-callout}
+- **One message = one source video**, not one chunk. Encode is cheap to
+  resume; chunking the SQS layer would multiply duplicate-claim risk.
+- **DLQ at 4 attempts** catches persistent failures (corrupt source,
+  unreachable URL) without flooding the queue.
+:::
+
+## Spot fleet orchestration {.smaller}
+
+```jsonc
+{
+  "Type": "maintain",               // auto-replace preempted instances
+  "TargetCapacity": 384,            // vCPU
+  "TargetCapacityUnitType": "vcpu",
+  "AllocationStrategy": "capacityOptimized",
+  "InstanceInterruptionBehavior": "terminate",
+
+  "LaunchTemplateConfigs": [{
+    "LaunchTemplateSpecification": {
+      "LaunchTemplateName": "aind-transcode-c8a",
+      "Version": "$Latest"
+    },
+    "Overrides": [
+      { "InstanceType": "c8a.48xlarge" },   // 5-10% monthly preempt
+      { "InstanceType": "c8a.24xlarge" }    // 10-15% monthly preempt
+    ]
+  }]
+}
+```
+
+::: {.arch-callout}
+- **`capacityOptimized`** — AWS picks the deepest spot pool at each launch
+  → fewer interruptions than `lowestPrice`.
+- **Only the two best preempt-rate sizes.** c8a.16xl and c8a.12xl are both in the >20% bucket; we skip them. Bare-metal sizes also excluded (slower boot, no throughput benefit).
+- **vCPU as the unit** — fleet hits 384 vCPU via 2× 48xl, 4× 24xl, or a mix, whichever AWS has deepest at launch.
+- **`maintain`** — preempted nodes are replaced automatically until the queue drains.
+:::
+
+## EC2 instance lifecycle
+
+```{mermaid}
+%%| fig-width: 11
+flowchart TD
+    L["EC2 spot launch"] --> U["user-data.sh: install ffmpeg + Python,<br>pip install, spawn workers per vCPU,<br>start watcher"]
+    U --> WATCH["IMDSv2 watcher polls /spot/instance-action"]
+    WATCH -- "interruption notice" --> KILL["kill -USR1 every worker pid"]
+    KILL --> DRAIN["workers drain and release SQS"]
+    DRAIN --> TERM["EC2 terminates ~120s later"]
+    U --> WLOOP["each worker:<br>receive → encode → drain → delete,<br>exit on 2 empty polls"]
+```
+
+## Concat phase {.smaller}
+
+```bash
+uv run backlog-concat                        # iterates manifest rows; idempotent
+uv run backlog-concat --delete-staging-after-concat   # opt-in cleanup
+```
+
+::: {.two-col}
+::: {}
+**Per manifest row**
+
+1. LIST `canonical/`
+2. assert contiguous markers
+3. download staged MKVs
+4. `ffmpeg -f concat -c copy` → MP4
+5. write `*.processing.json` ([aind-data-schema](https://github.com/AllenNeuralDynamics/aind-data-schema) `DataProcess`)
+6. write per-video audit JSON
+7. PUT final MP4 to `output_final_s3`
+:::
+::: {}
+**MP4 metadata = persistent provenance**
+
+- `source_s3`, `transcoder`, `encoder`
+- `profile`, `transcoded_at`, `author`
+
+**Audit JSON = operational state**
+
+- `chunk_count`, `canonical_marker_count`
+- staging object count + bytes
+- staging delete results
+- chunk-level checksums + lineage
+:::
+:::
+
+## Observability — status table
+
+Best-effort JSONL events at:
+
+```text
+s3://$OUTPUT_BUCKET/$PREFIX/status/events/batch_id=<id>/event_date=<date>/*.jsonl
+```
+
+::: {.small-table}
+| phase / status                          | written by   |
+|-----------------------------------------|--------------|
+| `pre_batch/queued`                      | pre-batch    |
+| `worker/encode_started`                 | worker       |
+| `worker/encode_completed`               | worker       |
+| `worker/already_complete`               | worker       |
+| `worker/preempted`                      | worker       |
+| `worker/failed`                         | worker       |
+| `concat/{completed,skipped_*,failed}`   | concat       |
+:::
+
+::: {.arch-callout}
+**Reporting only.** SQS owns work leasing; canonical markers own resume
+truth. The status table is Athena-queryable for "how is the batch doing
+right now?" without touching the control plane.
+:::
+
+## Verification + failure handling {.smaller}
+
+::: {.two-col}
+::: {}
+**Verification (fail-closed)**
+
+- Pre-concat: contiguous canonical markers
+- Post-concat: MP4 frame count == `Σ n_frames`
+- Pipeline-level: `scripts/verify.sh` walks the manifest, reports drift
+- Any mismatch is a **batch failure**, never a warning
+:::
+::: {}
+**Failure modes**
+
+- **Spot preempt:** SIGUSR1 → drain → vis(0)
+- **Network blip:** `-reconnect` + sidecar retry
+- **Lease loss:** SIGTERM ffmpeg, fail attempt
+- **Marker collision:** `IfNoneMatch:"*"` — losing worker raises
+- **Persistent failure:** DLQ at attempt 4
+- **Concat collision:** idempotent on `(final, audit)` pair
+:::
+:::
+
+## What's coming next
+
+- **Production launch:** small-pilot first (`LIMIT=50`), validate, then full.
+- **Audit ID disambiguation in DataProcess key** — `(video_id, camera)`
+  alone collides if two source URLs share that pair; will add audit_id.
+- **S3 chaos tests** — interrupted PUT, marker conflict mid-stage.
+- **Lifecycle policy** — auto-expire orphan staging objects from killed
+  attempts (canonical never expires).
+
+## Summary {.smaller}
+
+::: {.columns}
+::: {.column width="47%"}
+**Encoder & instance choice**
+
+- `slow / CRF 18` is the visible quality knee
+- `c8a.24xlarge` spot wins on throughput and \$/throughput
+- Whole batch: ~\$1,350 @ 8× c8a.24xl in ~4.5 days
+:::
+::: {.column width="47%"}
+**Architecture**
+
+- One ffmpeg per source, segment muxer, frame-index resume
+- Canonical/staging split — atomic marker promotion
+- SQS heartbeat + fail-closed on lease loss
+- Spot fleet `maintain` + `capacityOptimized`
+- Idempotent concat, manifest-driven verify
+:::
+:::
+
+::: {.ask-block}
+Repo: `AllenNeuralDynamics/backlog-batch-transcode` —
+runbook in `docs/PRODUCTION_BATCH.md`.
+:::

@@ -1,0 +1,6 @@
+*.html
+*_files/
+.quarto/
+clips/*.mp4
+clips/*.webm
+!clips/.gitkeep
