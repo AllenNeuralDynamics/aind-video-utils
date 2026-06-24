@@ -18,7 +18,7 @@ from aind_video_utils._rawvideo import (
     luma_from_yuv420p_buff_eltype,
     rgb_from_rawvideo_rgb24_buff,
 )
-from aind_video_utils.probe import get_frame_dimensions, get_video_range_info, get_yuv_format, probe
+from aind_video_utils.probe import ProbeDict, get_frame_dimensions, get_video_range_info, get_yuv_format, probe
 from aind_video_utils.utils import http_input_flags
 
 
@@ -87,7 +87,9 @@ def extract_srgb_frame(
 
 
 def extract_luma_frame(
-    video_path: str | Path, frame_time: float
+    video_path: str | Path,
+    frame_time: float,
+    probe_json: ProbeDict | None = None,
 ) -> tuple[npt.NDArray[np.uint8] | npt.NDArray[np.uint16], str, int]:
     """Extract the luma (Y) plane from a single video frame.
 
@@ -100,6 +102,9 @@ def extract_luma_frame(
         Path to the video file.
     frame_time : float
         Time in seconds at which to extract the frame.
+    probe_json : ProbeDict, optional
+        Pre-computed ffprobe output. Avoids re-probing when extracting
+        many frames from the same video.
 
     Returns
     -------
@@ -110,7 +115,8 @@ def extract_luma_frame(
     bit_depth : int
         Bits per component (8 or 10).
     """
-    probe_json = probe(video_path)
+    if probe_json is None:
+        probe_json = probe(video_path)
     pix_fmt = get_yuv_format(probe_json)
     format_is_8_bit = pix_fmt in _ALL_SUPPORTED_FORMATS_8BIT
     if not (format_is_8_bit or pix_fmt in _ALL_SUPPORTED_FORMATS_10BIT):
