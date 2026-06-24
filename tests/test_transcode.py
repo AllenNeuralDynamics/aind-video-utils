@@ -1,5 +1,14 @@
 """Tests for encoding profiles and transcode module."""
 
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import pytest
+
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
     OFFLINE_10BIT,
@@ -11,6 +20,11 @@ from aind_video_utils.encoding import (
     with_setparams,
 )
 from aind_video_utils.transcode import VIDEO_EXTENSIONS
+
+ffmpeg_required = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not on PATH",
+)
 
 # ---------------------------------------------------------------------------
 # SPEC_VERSION
@@ -244,9 +258,20 @@ def test_online_10bit_container():
 
 def test_with_setparams_prepends_filter():
     modified = with_setparams(OFFLINE_8BIT)
-    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709,"
+    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc,"
     assert modified.video_filters.startswith(expected_prefix)
     assert modified.video_filters == expected_prefix + OFFLINE_8BIT.video_filters
+
+
+def test_with_setparams_includes_range_pc():
+    """``range=pc`` is required for untagged yuv420p sources stored full-range.
+
+    Regression guard: without this, the chain treats untagged yuv420p as
+    limited-range and crushes Y in [0, 16] and [235, 255] before the OETF
+    runs. See test_offline_8bit_preserves_full_range_yuv420p_shadows_and_highlights.
+    """
+    modified = with_setparams(OFFLINE_8BIT)
+    assert "range=pc" in modified.video_filters
 
 
 def test_with_setparams_does_not_mutate_original():
@@ -277,6 +302,107 @@ def test_profiles_lookup():
 
 def test_profiles_has_four_entries():
     assert len(PROFILES) == 4
+
+
+# ---------------------------------------------------------------------------
+# End-to-end regression: untagged yuv420p must not crush full-range content
+# ---------------------------------------------------------------------------
+
+
+def _encode_untagged_yuv420p(out_path: Path, luma_values: list[int]) -> None:
+    """Write a yuv420p mpeg4 source with given Y values and NO color_range tag.
+
+    Mimics the AIND Bonsai production format: full-range yuv420p without
+    explicit range/space/transfer/primaries metadata.
+    """
+    W, H = 64, 64
+    raw = out_path.parent / "untagged.yuv"
+    with raw.open("wb") as f:
+        for y in luma_values:
+            Y = np.full((H, W), y, dtype=np.uint8)
+            U = np.full((H // 2, W // 2), 128, dtype=np.uint8)
+            V = np.full((H // 2, W // 2), 128, dtype=np.uint8)
+            f.write(Y.tobytes())
+            f.write(U.tobytes())
+            f.write(V.tobytes())
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error",
+            "-f", "rawvideo", "-pixel_format", "yuv420p",
+            "-video_size", f"{W}x{H}", "-framerate", "10",
+            "-i", str(raw),
+            "-c:v", "mpeg4", "-q:v", "1",
+            "-pix_fmt", "yuv420p",
+            # Deliberately NO -color_range, -colorspace, -color_trc, -color_primaries
+            # — match the production-file metadata shape.
+            str(out_path),
+        ],
+        check=True,
+    )
+
+
+def _decode_center_luma(path: Path, n_frames: int) -> list[int]:
+    """Return the center-pixel Y value of each frame in the file."""
+    W, H = 64, 64
+    raw = path.parent / f"{path.stem}.y"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error", "-i", str(path),
+            "-vf", "extractplanes=y",
+            "-f", "rawvideo", "-pix_fmt", "gray",
+            str(raw),
+        ],
+        check=True,
+    )
+    arr = np.fromfile(raw, dtype=np.uint8).reshape(n_frames, H, W)
+    return [int(arr[i, H // 2, W // 2]) for i in range(n_frames)]
+
+
+@ffmpeg_required
+def test_offline_8bit_preserves_full_range_yuv420p_shadows_and_highlights(tmp_path: Path) -> None:
+    """Untagged full-range yuv420p input must round-trip through OFFLINE_8BIT
+    without crushing shadow (Y<16) or highlight (Y>235) detail.
+
+    Regression guard for the ``range=pc`` term in ``_SETPARAMS``. Without it,
+    every Y in [0, 16] crushes to output 16 (shadows lost) and every Y in
+    [235, 255] crushes to output 236 (highlights lost). With it, shadow and
+    highlight values map to distinguishable output luma.
+    """
+    sentinels = [8, 16, 245, 255]
+    src = tmp_path / "src.mp4"
+    dst = tmp_path / "dst.mp4"
+    _encode_untagged_yuv420p(src, sentinels)
+
+    profile = with_setparams(OFFLINE_8BIT)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", str(src),
+            *profile.ffmpeg_output_args(),
+            str(dst),
+        ],
+        check=True,
+    )
+
+    out_y = _decode_center_luma(dst, len(sentinels))
+
+    # The two shadow values (8, 16) and two highlight values (245, 255) must
+    # produce DIFFERENT output luma. With the limited-range-default bug both
+    # pairs collapse to a single value; the fix is what spreads them apart.
+    assert out_y[0] != out_y[1], (
+        f"shadow detail crushed: Y=8 and Y=16 both mapped to {out_y[0]} — "
+        "untagged yuv420p is being treated as limited-range. "
+        "Check that range=pc is set in _SETPARAMS."
+    )
+    assert out_y[2] != out_y[3], (
+        f"highlight detail crushed: Y=245 and Y=255 both mapped to {out_y[2]} — "
+        "untagged yuv420p is being treated as limited-range. "
+        "Check that range=pc is set in _SETPARAMS."
+    )
+
+    # And the values should be in the right direction: low-source-Y → low-output-Y,
+    # high-source-Y → high-output-Y. (Sanity check that no inversion crept in.)
+    assert out_y[0] < out_y[1] < out_y[2] < out_y[3]
 
 
 # ---------------------------------------------------------------------------

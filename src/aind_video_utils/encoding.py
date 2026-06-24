@@ -25,8 +25,18 @@ the profiles implement.  Independent of the package version."""
 # ---------------------------------------------------------------------------
 # Setparams filter for sources missing colour metadata (used by auto-fix)
 # ---------------------------------------------------------------------------
+#
+# ``range=pc`` is required for untagged yuv420p sources: AIND Bonsai stores
+# camera-linear yuv420p in full range (Y in [0, 255]) without setting the
+# ``color_range`` VUI bit. Without ``range=pc`` here, ffmpeg's filters default
+# to limited-range (tv) for untagged yuv420p — values in [0, 16] crush to 16
+# and [235, 255] crush to 235 before the OETF ever runs, losing shadow and
+# highlight detail.
+#
+# For gbrp sources (which carry ``color_range=pc`` explicitly in metadata),
+# this is a redundant re-assertion and has no effect.
 
-_SETPARAMS = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709"
+_SETPARAMS = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc"
 
 
 @dataclass(frozen=True)
