@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.0 (2026-06-24)
+
+### Feat
+
+- **qc**: headless batch exposure QC module + CLI
+- **benchmarks**: add PSNR and SSIM scoring helpers; rework notebook layout
+
+### Fix
+
+- **encoding**: probe-aware setparams; remove redundant ispace=bt709 override
+- **encoding**: force range=pc in setparams to prevent yuv420p shadow/highlight crush
+
 ## v0.3.1 (2026-03-06)
 
 ### Fix
