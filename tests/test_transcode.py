@@ -390,12 +390,26 @@ def _encode_untagged_yuv420p(out_path: Path, luma_values: list[int]) -> None:
             f.write(V.tobytes())
     subprocess.run(
         [
-            "ffmpeg", "-y", "-v", "error",
-            "-f", "rawvideo", "-pixel_format", "yuv420p",
-            "-video_size", f"{W}x{H}", "-framerate", "10",
-            "-i", str(raw),
-            "-c:v", "mpeg4", "-q:v", "1",
-            "-pix_fmt", "yuv420p",
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "yuv420p",
+            "-video_size",
+            f"{W}x{H}",
+            "-framerate",
+            "10",
+            "-i",
+            str(raw),
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
             # Deliberately NO -color_range, -colorspace, -color_trc, -color_primaries
             # — match the production-file metadata shape.
             str(out_path),
@@ -410,9 +424,18 @@ def _decode_center_luma(path: Path, n_frames: int) -> list[int]:
     raw = path.parent / f"{path.stem}.y"
     subprocess.run(
         [
-            "ffmpeg", "-y", "-v", "error", "-i", str(path),
-            "-vf", "extractplanes=y",
-            "-f", "rawvideo", "-pix_fmt", "gray",
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            "extractplanes=y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
             str(raw),
         ],
         check=True,
@@ -439,8 +462,12 @@ def test_offline_8bit_preserves_full_range_yuv420p_shadows_and_highlights(tmp_pa
     profile = with_setparams(OFFLINE_8BIT)
     subprocess.run(
         [
-            "ffmpeg", "-y", "-v", "error",
-            "-i", str(src),
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(src),
             *profile.ffmpeg_output_args(),
             str(dst),
         ],

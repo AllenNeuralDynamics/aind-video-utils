@@ -172,9 +172,7 @@ OFFLINE_8BIT = EncodingProfile(
 )
 
 OFFLINE_10BIT = EncodingProfile(
-    video_filters=(
-        "colorspace=all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le"
-    ),
+    video_filters=("colorspace=all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le"),
     codec="libx264",
     pixel_format="yuv420p10le",
     container="mp4",
@@ -292,10 +290,7 @@ def with_setparams(profile: EncodingProfile, probe_json: ProbeDict | None = None
         # matches the bitstream truth for the typical untagged-yuv420p caller;
         # for gbrp callers without a probe, ``setparams`` is harmless metadata
         # (the scale step does RGB→YUV explicitly via ``out_color_matrix=``).
-        sp = (
-            "setparams=color_primaries=bt709:color_trc=linear:"
-            "colorspace=smpte170m:range=pc"
-        )
+        sp = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=pc"
     return profile.replace(
         video_filters=f"{sp},{profile.video_filters}",
     )
