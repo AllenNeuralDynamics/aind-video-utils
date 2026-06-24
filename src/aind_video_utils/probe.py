@@ -146,13 +146,15 @@ def get_video_range_info(probe_json: ProbeDict) -> tuple[str, int]:
     Returns
     -------
     color_range : str
-        ``"pc"`` (full) or ``"tv"`` (limited).
+        ``"pc"`` (full), ``"tv"`` (limited), or ``"unknown"`` when the source
+        bitstream doesn't carry the tag (e.g., mpeg4, which has no VUI for
+        color range).
     bit_depth : int
         Bits per component (8 or 10).
     """
     vidstream = probe_json["streams"][0]
     pix_fmt = vidstream["pix_fmt"]
-    color_range = vidstream["color_range"]
+    color_range = vidstream.get("color_range", "unknown")
     bit_depth = pix_format_bit_depth(pix_fmt)
     return color_range, bit_depth
 
