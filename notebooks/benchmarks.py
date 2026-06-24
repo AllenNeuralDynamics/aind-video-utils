@@ -1,9 +1,21 @@
 # %%
-from aind_video_utils import benchmarking as avbench
-import ffmpeg
-import pandas as pd
 import copy
 import re
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+# benchmarking.py lives in `benchmarks/` (not installed with the package).
+try:
+    _here = Path(__file__).resolve().parent
+except NameError:  # running in a Jupyter kernel
+    _here = Path.cwd()
+sys.path.insert(0, str(_here.parent / "benchmarks"))
+
+import benchmarking as avbench  # type: ignore[import-not-found]  # noqa: E402
+
+from aind_video_utils import probe  # noqa: E402
 
 # %%
 raw_filename = "/home/galen.lynch/encode-testing/raw/testing_videos/gamma_no-05282024161822-0000.avi"
@@ -141,7 +153,7 @@ h264_vmaf_kwargs = dict(format="yuv420p10le", range="full")
 h265_vmaf_kwargs = dict(format="yuv420p10le", range="full")
 
 # %%
-rawprobe = ffmpeg.probe(raw_filename)
+rawprobe = probe(raw_filename)
 rawvidstreamprobe = rawprobe["streams"][0]
 raw_bitrate = int(rawvidstreamprobe["bit_rate"])
 
@@ -512,7 +524,7 @@ df.to_csv(out_filename, index=False, sep="\t")
 # Cleanup: Remove temporary first-stage files
 import os
 
-for cq, (filepath, _) in first_stage_files.items():
+for (cq, preset), (filepath, _) in first_stage_files.items():
     try:
         os.remove(filepath)
         print(f"Removed temporary file: {filepath}")

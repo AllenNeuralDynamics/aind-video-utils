@@ -96,6 +96,124 @@ def get_vmaf_score(
     return get_vmaf_score_from_xml(log_filename)
 
 
+def get_psnr_score(
+    raw_filename: str,
+    distorted_filename: str,
+    log_filename: str | None = None,
+    range: str = "tv",
+    format: str = "yuv420p10le",
+) -> float:
+    """Compute average luma PSNR (dB) between reference and distorted videos.
+
+    Runs ffmpeg with the ``psnr`` filter and parses the summary line printed
+    to stderr.  Returns the luma (Y) channel average, which is the meaningful
+    number for grayscale / scientific content where chroma is approximately
+    constant.
+
+    Parameters
+    ----------
+    raw_filename : str
+        Path to the reference (undistorted) video.
+    distorted_filename : str
+        Path to the distorted (encoded) video.
+    log_filename : str | None
+        If provided, per-frame PSNR stats are written here.
+    range : str
+        Output color range for comparison (``"tv"`` or ``"pc"``).
+    format : str
+        Pixel format both inputs are converted to before comparison.
+
+    Returns
+    -------
+    float
+        Average luma PSNR in dB across all frames.
+    """
+    psnr_filter = "psnr"
+    if log_filename is not None:
+        psnr_filter += f"=stats_file={log_filename}"
+    cmd = (
+        f"ffmpeg -i {raw_filename} "
+        f"-i {distorted_filename} "
+        f'-lavfi "[0:v]setpts=PTS-STARTPTS,scale=out_range={range},'
+        f"format={format}[reference]; "
+        f"        [1:v]setpts=PTS-STARTPTS,scale=out_range={range},"
+        f"format={format}[distorted]; "
+        f'        [distorted][reference]{psnr_filter}" '
+        "-f null -"
+    )
+    result = sp.run(
+        shlex.split(cmd),
+        stderr=sp.PIPE,
+        stdout=sp.DEVNULL,
+        text=True,
+        check=True,
+    )
+    # Summary line: "PSNR y:42.654 u:48.123 v:48.456 average:43.890 min:... max:..."
+    match = re.search(r"PSNR\s+y:([\d.]+)", result.stderr)
+    if not match:
+        raise ValueError("Could not find PSNR y: value in ffmpeg output")
+    return float(match.group(1))
+
+
+def get_ssim_score(
+    raw_filename: str,
+    distorted_filename: str,
+    log_filename: str | None = None,
+    range: str = "tv",
+    format: str = "yuv420p10le",
+) -> float:
+    """Compute average luma SSIM between reference and distorted videos.
+
+    Runs ffmpeg with the ``ssim`` filter and parses the summary line printed
+    to stderr.  Returns the luma (Y) channel SSIM; on grayscale content the
+    ``All`` weighted value would be inflated by near-constant chroma planes.
+
+    Parameters
+    ----------
+    raw_filename : str
+        Path to the reference video.
+    distorted_filename : str
+        Path to the distorted video.
+    log_filename : str | None
+        If provided, per-frame SSIM stats are written here.
+    range : str
+        Output color range for comparison.
+    format : str
+        Pixel format both inputs are converted to before comparison.
+
+    Returns
+    -------
+    float
+        Average luma SSIM (0-1, higher is better; >0.95 is typical "high
+        quality," >0.99 typically transparent).
+    """
+    ssim_filter = "ssim"
+    if log_filename is not None:
+        ssim_filter += f"=stats_file={log_filename}"
+    cmd = (
+        f"ffmpeg -i {raw_filename} "
+        f"-i {distorted_filename} "
+        f'-lavfi "[0:v]setpts=PTS-STARTPTS,scale=out_range={range},'
+        f"format={format}[reference]; "
+        f"        [1:v]setpts=PTS-STARTPTS,scale=out_range={range},"
+        f"format={format}[distorted]; "
+        f'        [distorted][reference]{ssim_filter}" '
+        "-f null -"
+    )
+    result = sp.run(
+        shlex.split(cmd),
+        stderr=sp.PIPE,
+        stdout=sp.DEVNULL,
+        text=True,
+        check=True,
+    )
+    # Summary line: "SSIM Y:0.969 (15.19) U:0.992 (21.44) V:0.991 (20.85) All:0.978 (16.62)"
+    match = re.search(r"SSIM\s+Y:([\d.]+)", result.stderr)
+    if not match:
+        raise ValueError("Could not find SSIM Y: value in ffmpeg output")
+    return float(match.group(1))
+
+
 def parse_ffmpeg_output_for_perf_stats(cmd_output: str) -> tuple[float, float]:
     """Parse encoding FPS and bitrate from ffmpeg stderr output.
 
