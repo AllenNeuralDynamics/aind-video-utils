@@ -79,7 +79,7 @@ def test_offline_8bit_output_args():
         "-vf",
         "scale=out_color_matrix=bt709:out_range=full:sws_dither=none,"
         "format=yuv420p10le,"
-        "colorspace=ispace=bt709:all=bt709:dither=none,"
+        "colorspace=all=bt709:dither=none,"
         "scale=out_range=tv:sws_dither=none,"
         "format=yuv420p",
         "-c:v",
@@ -114,7 +114,7 @@ def test_offline_10bit_output_args():
     args = OFFLINE_10BIT.ffmpeg_output_args()
     assert args == [
         "-vf",
-        "colorspace=ispace=bt709:all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le",
+        "colorspace=all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le",
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -256,21 +256,84 @@ def test_online_10bit_container():
 # ---------------------------------------------------------------------------
 
 
-def test_with_setparams_prepends_filter():
+def _probe_json(**stream_fields: object) -> dict:
+    """Minimal probe_json with given stream-level color fields. Defaults to
+    untagged (mimics the AIND mpeg4 yuv420p production shape)."""
+    return {"streams": [{"pix_fmt": stream_fields.get("pix_fmt", "yuv420p"), **stream_fields}]}
+
+
+def test_with_setparams_no_probe_uses_aind_defaults():
+    """Without probe_json, with_setparams fills every field with AIND defaults
+    (colorspace=smpte170m, matching the bitstream truth for untagged YUV)."""
     modified = with_setparams(OFFLINE_8BIT)
-    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc,"
+    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=pc,"
     assert modified.video_filters.startswith(expected_prefix)
     assert modified.video_filters == expected_prefix + OFFLINE_8BIT.video_filters
 
 
-def test_with_setparams_includes_range_pc():
-    """``range=pc`` is required for untagged yuv420p sources stored full-range.
+def test_with_setparams_probe_aware_fully_tagged_source_unchanged():
+    """If the source already tags all four color fields, with_setparams returns
+    the profile unchanged."""
+    probe_json = _probe_json(
+        pix_fmt="yuv420p",
+        color_primaries="bt709",
+        color_transfer="bt709",
+        color_space="bt709",
+        color_range="tv",
+    )
+    modified = with_setparams(OFFLINE_8BIT, probe_json)
+    assert modified.video_filters == OFFLINE_8BIT.video_filters  # no setparams prepended
 
-    Regression guard: without this, the chain treats untagged yuv420p as
-    limited-range and crushes Y in [0, 16] and [235, 255] before the OETF
-    runs. See test_offline_8bit_preserves_full_range_yuv420p_shadows_and_highlights.
-    """
-    modified = with_setparams(OFFLINE_8BIT)
+
+def test_with_setparams_probe_aware_yuv420p_untagged_fills_smpte170m():
+    """Untagged yuv420p sources get colorspace=smpte170m (ffmpeg encoder
+    default for untagged YUV)."""
+    probe_json = _probe_json(pix_fmt="yuv420p")
+    modified = with_setparams(OFFLINE_8BIT, probe_json)
+    assert "colorspace=smpte170m" in modified.video_filters
+    assert "color_trc=linear" in modified.video_filters
+    assert "range=pc" in modified.video_filters
+
+
+def test_with_setparams_probe_aware_gbrp_untagged_fills_gbr():
+    """gbrp sources missing color_space get colorspace=gbr (truthfully RGB,
+    no YUV matrix yet applied)."""
+    probe_json = _probe_json(pix_fmt="gbrp")
+    modified = with_setparams(OFFLINE_8BIT, probe_json)
+    assert "colorspace=gbr" in modified.video_filters
+
+
+def test_with_setparams_probe_aware_gbrp_with_tags_preserves_them():
+    """gbrp sources with color_range=pc and color_space=gbr already tagged
+    only get color_trc and color_primaries added — the existing tags are not
+    overridden."""
+    probe_json = _probe_json(
+        pix_fmt="gbrp",
+        color_space="gbr",
+        color_range="pc",
+    )
+    modified = with_setparams(OFFLINE_8BIT, probe_json)
+    assert "color_trc=linear" in modified.video_filters
+    assert "color_primaries=bt709" in modified.video_filters
+    # Source-tagged fields must NOT be re-asserted (would be lying-or-redundant)
+    assert "colorspace=" not in modified.video_filters.split(",")[0]
+    assert "range=" not in modified.video_filters.split(",")[0]
+
+
+def test_with_setparams_probe_aware_unknown_treated_as_missing():
+    """ffprobe sometimes emits 'unknown' for fields that aren't tagged.  Those
+    should be treated identically to missing — filled in by setparams."""
+    probe_json = _probe_json(
+        pix_fmt="yuv420p",
+        color_primaries="unknown",
+        color_transfer="unknown",
+        color_space="unknown",
+        color_range="unknown",
+    )
+    modified = with_setparams(OFFLINE_8BIT, probe_json)
+    assert "color_primaries=bt709" in modified.video_filters
+    assert "color_trc=linear" in modified.video_filters
+    assert "colorspace=smpte170m" in modified.video_filters
     assert "range=pc" in modified.video_filters
 
 

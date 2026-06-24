@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from aind_video_utils.encoding import OFFLINE_8BIT, EncodingProfile, with_setparams
-from aind_video_utils.probe import get_color_transfer, probe
+from aind_video_utils.probe import probe
 from aind_video_utils.utils import http_input_flags
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
@@ -48,8 +48,9 @@ def transcode_video(
         Encoding profile to use.  Defaults to :data:`OFFLINE_8BIT`.
     auto_fix_colorspace : bool
         When ``True`` (the default), probe the source and prepend a
-        ``setparams`` filter if ``color_trc`` metadata is absent.
-        Set to ``False`` for exact control over filters.
+        ``setparams`` filter that fills in only the color-metadata fields the
+        source has tagged as missing.  Set to ``False`` for exact control
+        over filters (no setparams prepended at all).
     no_audio : bool
         If ``True``, strip audio (``-an``).
     on_progress : Callable[[int], None] | None
@@ -68,9 +69,7 @@ def transcode_video(
     effective = profile
     if auto_fix_colorspace:
         probe_json = probe(input_path)
-        color_trc = get_color_transfer(probe_json)
-        if color_trc is None:
-            effective = with_setparams(profile)
+        effective = with_setparams(profile, probe_json)
 
     cmd: list[str] = ["ffmpeg"]
     cmd.extend(http_input_flags(input_path))

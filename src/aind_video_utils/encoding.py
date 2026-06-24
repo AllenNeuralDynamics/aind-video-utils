@@ -18,25 +18,72 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
+from aind_video_utils.probe import (
+    ProbeDict,
+    get_color_primaries,
+    get_color_range,
+    get_color_space,
+    get_color_transfer,
+    get_yuv_format,
+)
+
 SPEC_VERSION: str = "1.0"
 """Tracks which revision of the aind-file-standards behavior video spec
 the profiles implement.  Independent of the package version."""
 
 # ---------------------------------------------------------------------------
-# Setparams filter for sources missing colour metadata (used by auto-fix)
+# Setparams filter — fill missing color metadata only
 # ---------------------------------------------------------------------------
 #
-# ``range=pc`` is required for untagged yuv420p sources: AIND Bonsai stores
-# camera-linear yuv420p in full range (Y in [0, 255]) without setting the
-# ``color_range`` VUI bit. Without ``range=pc`` here, ffmpeg's filters default
-# to limited-range (tv) for untagged yuv420p — values in [0, 16] crush to 16
-# and [235, 255] crush to 235 before the OETF ever runs, losing shadow and
-# highlight detail.
+# AIND sources carry partial or no color metadata in the bitstream:
+#   - h264 gbrp files (camera-linear RGB) tag color_range=pc and color_space=gbr;
+#     color_trc and color_primaries are absent.
+#   - mpeg4 yuv420p files carry NO color metadata at all (the bitstream has no
+#     VUI for it); the underlying RGB→YUV matrix is whatever libswscale used
+#     when Bonsai/ffmpeg created the file, which empirically is smpte170m
+#     (BT.601) — the universal default for untagged conversion.
 #
-# For gbrp sources (which carry ``color_range=pc`` explicitly in metadata),
-# this is a redundant re-assertion and has no effect.
+# Defensive defaults injected here (only for fields the source doesn't tag):
+#   color_primaries=bt709    — Modern camera sensors, and ffmpeg doesn't apply
+#                              a primary rotation during RGB→YUV. Declaring
+#                              bt709 means "no primary rotation" downstream.
+#   color_trc=linear         — Bonsai stores raw linear scene light (no OETF
+#                              applied at capture time).
+#   colorspace=gbr / smpte170m — Match the bitstream truth: gbr for RGB-planar
+#                              sources; smpte170m (BT.601) for untagged YUV,
+#                              the matrix libswscale uses by default.
+#   range=pc                 — Bonsai stores full-range Y (luma reaches 0 and
+#                              255 in production files, incompatible with
+#                              tv-range floor at 16). Without this, untagged
+#                              yuv420p defaults to tv-range and crushes
+#                              shadows/highlights at the chain's first scale.
 
-_SETPARAMS = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc"
+
+def setparams_filter_for_source(probe_json: ProbeDict) -> str | None:
+    """Build a ``setparams`` filter string with only the fields missing on the source.
+
+    Returns ``None`` if the source has color_primaries, color_trc, color_space,
+    and color_range all tagged.  Otherwise returns ``setparams=<a=b:c=d:...>``
+    for use as a leading filter in the chain.
+
+    Defaults follow the AIND Bonsai capture conventions documented above.
+    """
+    parts: list[str] = []
+    if get_color_primaries(probe_json) is None:
+        parts.append("color_primaries=bt709")
+    if get_color_transfer(probe_json) is None:
+        parts.append("color_trc=linear")
+    if get_color_space(probe_json) is None:
+        pix_fmt = get_yuv_format(probe_json)
+        if pix_fmt and pix_fmt.startswith("gbr"):
+            parts.append("colorspace=gbr")
+        else:
+            parts.append("colorspace=smpte170m")
+    if get_color_range(probe_json) is None:
+        parts.append("range=pc")
+    if not parts:
+        return None
+    return f"setparams={':'.join(parts)}"
 
 
 @dataclass(frozen=True)
@@ -111,7 +158,7 @@ OFFLINE_8BIT = EncodingProfile(
     video_filters=(
         "scale=out_color_matrix=bt709:out_range=full:sws_dither=none,"
         "format=yuv420p10le,"
-        "colorspace=ispace=bt709:all=bt709:dither=none,"
+        "colorspace=all=bt709:dither=none,"
         "scale=out_range=tv:sws_dither=none,"
         "format=yuv420p"
     ),
@@ -126,7 +173,7 @@ OFFLINE_8BIT = EncodingProfile(
 
 OFFLINE_10BIT = EncodingProfile(
     video_filters=(
-        "colorspace=ispace=bt709:all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le"
+        "colorspace=all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le"
     ),
     codec="libx264",
     pixel_format="yuv420p10le",
@@ -214,12 +261,41 @@ PROFILES: dict[str, EncodingProfile] = {
 }
 
 
-def with_setparams(profile: EncodingProfile) -> EncodingProfile:
-    """Prepend the ``setparams`` colour-metadata filter to *profile*.
+def with_setparams(profile: EncodingProfile, probe_json: ProbeDict | None = None) -> EncodingProfile:
+    """Prepend a ``setparams`` colour-metadata filter to *profile*.
 
-    Useful for sources missing ``color_trc`` metadata.  Returns a new profile
-    via :meth:`EncodingProfile.replace`.
+    Parameters
+    ----------
+    profile : EncodingProfile
+        Base profile to extend.
+    probe_json : ProbeDict | None
+        Result of :func:`aind_video_utils.probe.probe` on the source.  When
+        provided, the prepended setparams clause includes only fields the
+        source has tagged as missing (per :func:`setparams_filter_for_source`),
+        respecting any color metadata the source already declares.  When
+        ``None``, every field is set to the AIND default — useful when the
+        caller knows the source is fully untagged or doesn't want to probe.
+
+    Returns
+    -------
+    EncodingProfile
+        A new profile with the setparams clause prepended to ``video_filters``,
+        or the original profile unchanged when ``probe_json`` indicates the
+        source already carries all four color fields.
     """
+    if probe_json is not None:
+        sp = setparams_filter_for_source(probe_json)
+        if sp is None:
+            return profile
+    else:
+        # No probe — default to filling every field. ``colorspace=smpte170m``
+        # matches the bitstream truth for the typical untagged-yuv420p caller;
+        # for gbrp callers without a probe, ``setparams`` is harmless metadata
+        # (the scale step does RGB→YUV explicitly via ``out_color_matrix=``).
+        sp = (
+            "setparams=color_primaries=bt709:color_trc=linear:"
+            "colorspace=smpte170m:range=pc"
+        )
     return profile.replace(
-        video_filters=f"{_SETPARAMS},{profile.video_filters}",
+        video_filters=f"{sp},{profile.video_filters}",
     )

@@ -58,7 +58,7 @@ def get_yuv_format(probe_json: ProbeDict) -> str:
     return str(probe_json["streams"][0]["pix_fmt"])
 
 
-def get_color_range(probe_json: ProbeDict) -> str:
+def get_color_range(probe_json: ProbeDict) -> str | None:
     """Return the color range from the first video stream.
 
     Parameters
@@ -68,10 +68,54 @@ def get_color_range(probe_json: ProbeDict) -> str:
 
     Returns
     -------
-    str
-        Color range, typically ``"pc"`` (full) or ``"tv"`` (limited).
+    str | None
+        Color range string (``"pc"`` full, ``"tv"`` limited), or ``None`` when
+        absent or ``"unknown"``.
     """
-    return str(probe_json["streams"][0]["color_range"])
+    color_range = probe_json["streams"][0].get("color_range")
+    if color_range in (None, "unknown"):
+        return None
+    return str(color_range)
+
+
+def get_color_space(probe_json: ProbeDict) -> str | None:
+    """Return the colorspace (matrix) tag from the first video stream.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    str | None
+        Matrix string (e.g. ``"bt709"``, ``"smpte170m"``, ``"gbr"``), or
+        ``None`` when absent or ``"unknown"``.
+    """
+    color_space = probe_json["streams"][0].get("color_space")
+    if color_space in (None, "unknown"):
+        return None
+    return str(color_space)
+
+
+def get_color_primaries(probe_json: ProbeDict) -> str | None:
+    """Return the color primaries from the first video stream.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    str | None
+        Primaries string (e.g. ``"bt709"``, ``"smpte170m"``), or ``None`` when
+        absent or ``"unknown"``.
+    """
+    color_primaries = probe_json["streams"][0].get("color_primaries")
+    if color_primaries in (None, "unknown"):
+        return None
+    return str(color_primaries)
 
 
 def get_frame_dimensions(probe_json: ProbeDict) -> tuple[int, int]:
