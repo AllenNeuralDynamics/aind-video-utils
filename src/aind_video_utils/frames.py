@@ -85,7 +85,17 @@ def extract_srgb_frame(
         else:
             video_filter = base_zscale + ",format=rgb24"
     elif must_coerce:
-        video_filter = "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709," + base_colorspace_filter
+        # range=pc is critical here: without it, the subsequent
+        # `colorspace=range=pc` filter sees an unspecified input range and
+        # defaults BT.709 to limited (TV), then does a bogus TV→PC
+        # expansion that crushes linear sub-16 source values toward 0.
+        # AIND linear-light sources ARE PC range (no headroom/footroom),
+        # so tag it explicitly. Caught 2026-06-25 while QCing the smoke
+        # batch — input sRGB extraction was 30 codes darker than the
+        # otherwise-identical output sRGB, all from this missing tag.
+        video_filter = (
+            "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc," + base_colorspace_filter
+        )
     else:
         video_filter = base_colorspace_filter
     cmd_parts = [
