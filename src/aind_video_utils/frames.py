@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess as sp
 from pathlib import Path
 
@@ -18,8 +19,17 @@ from aind_video_utils._rawvideo import (
     luma_from_yuv420p_buff_eltype,
     rgb_from_rawvideo_rgb24_buff,
 )
-from aind_video_utils.probe import ProbeDict, get_frame_dimensions, get_video_range_info, get_yuv_format, probe
+from aind_video_utils.probe import (
+    ProbeDict,
+    get_color_transfer,
+    get_frame_dimensions,
+    get_video_range_info,
+    get_yuv_format,
+    probe,
+)
 from aind_video_utils.utils import http_input_flags
+
+logger = logging.getLogger(__name__)
 
 
 def extract_srgb_frame(
@@ -51,9 +61,24 @@ def extract_srgb_frame(
     ms_string = utils.get_millisecond_string(frame_time)
     base_colorspace_filter = "colorspace=trc=srgb:space=bt709:primaries=bt709:range=pc,format=rgb24"
     if _is_gbr_format(pix_fmt):
-        # Use zscale for GBR formats (colorspace filter requires YCbCr input)
+        # Use zscale for GBR formats (colorspace filter requires YCbCr input).
+        # zscale needs to know the input transfer characteristic to pick a
+        # path; if the source has no `color_transfer` tag in metadata AND
+        # we don't pass `transferin=...`, zimg fails with
+        # "no path between colorspaces" (exit 187). AIND h264_nvenc sources
+        # are typically untagged, so default to linear when the tag is
+        # missing — that's the AIND convention. Callers can suppress the
+        # warning by passing coerce_input_color_space=True explicitly.
         base_zscale = "zscale=matrixin=gbr:matrix=gbr:transfer=iec61966-2-1:range=full"
-        if coerce_input_color_space:
+        source_transfer = get_color_transfer(probe_json)
+        if coerce_input_color_space or source_transfer is None:
+            if source_transfer is None and not coerce_input_color_space:
+                logger.warning(
+                    "%s has no color_transfer in metadata; defaulting to "
+                    "transferin=linear. Pass coerce_input_color_space=True "
+                    "to silence this warning.",
+                    video_path,
+                )
             video_filter = base_zscale + ":transferin=linear,format=rgb24"
         else:
             video_filter = base_zscale + ",format=rgb24"
