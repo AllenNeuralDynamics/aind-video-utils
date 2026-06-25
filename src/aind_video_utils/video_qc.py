@@ -53,7 +53,16 @@ def get_frame_pair_from_video(
     color_range, bit_depth = get_video_range_info(probe_json)
     luma = extract_luma_frame(video_path, frame_time)[0]
     srgb = extract_srgb_frame(video_path, frame_time, coerce_color_space)
-    return luma, srgb, bit_depth, color_range == "pc"
+    # coerce_color_space implies AIND linear-light convention, which is PC
+    # range by definition (linear photon counts have no headroom/footroom).
+    # Without this override, an untagged source (color_range='unknown') is
+    # treated as TV, which propagates to luma_range_input=(16,235) and
+    # mislabels the bivariate plot's "standard range" lines + the luma
+    # clip title. Caught 2026-06-25 on the smoke QC pass: untagged mpeg4
+    # source's bivariate showed input min appearing at x~2 because the
+    # axis was clamped to TV range while real source values straddled 16.
+    is_full_range = coerce_color_space or color_range == "pc"
+    return luma, srgb, bit_depth, is_full_range
 
 
 def compare_linear_to_bt709(
