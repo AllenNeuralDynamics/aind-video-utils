@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.0 (2026-06-26)
+
+### Feat
+
+- **encoding**: add range_override to override source/default range tag
+
+### Fix
+
+- **encoding**: tighten OFFLINE precision flags + ed dither on 8-bit demote
+- **video_qc**: treat coerce_color_space inputs as PC range
+- **frames**: set range=pc in setparams for YUV+coerce sRGB extraction
+- **frames**: extend missing-transfer fallback to YUV branch too
+- **frames**: default transferin=linear for gbrp sources missing transfer tag
+
 ## v0.4.1 (2026-06-24)
 
 ### Fix
