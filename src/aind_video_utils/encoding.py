@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from aind_video_utils.probe import (
     ProbeDict,
@@ -26,6 +26,8 @@ from aind_video_utils.probe import (
     get_color_transfer,
     get_yuv_format,
 )
+
+RangeOverride = Literal["pc", "tv"]
 
 SPEC_VERSION: str = "1.0"
 """Tracks which revision of the aind-file-standards behavior video spec
@@ -59,14 +61,27 @@ the profiles implement.  Independent of the package version."""
 #                              shadows/highlights at the chain's first scale.
 
 
-def setparams_filter_for_source(probe_json: ProbeDict) -> str | None:
+def setparams_filter_for_source(
+    probe_json: ProbeDict,
+    range_override: RangeOverride | None = None,
+) -> str | None:
     """Build a ``setparams`` filter string with only the fields missing on the source.
 
     Returns ``None`` if the source has color_primaries, color_trc, color_space,
-    and color_range all tagged.  Otherwise returns ``setparams=<a=b:c=d:...>``
-    for use as a leading filter in the chain.
+    and color_range all tagged and no ``range_override`` is requested.  Otherwise
+    returns ``setparams=<a=b:c=d:...>`` for use as a leading filter in the chain.
 
     Defaults follow the AIND Bonsai capture conventions documented above.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Probe result for the source.
+    range_override : {"pc", "tv"} | None
+        When set, force the ``range=`` field to this value regardless of what
+        the source tags.  Use ``"tv"`` for sources known to be TV-range encoded
+        but tagged otherwise (e.g. the AIND mpeg4 yuv420p subset), which the
+        default ``range=pc`` fallback would mis-tag.
     """
     parts: list[str] = []
     if get_color_primaries(probe_json) is None:
@@ -79,7 +94,9 @@ def setparams_filter_for_source(probe_json: ProbeDict) -> str | None:
             parts.append("colorspace=gbr")
         else:
             parts.append("colorspace=smpte170m")
-    if get_color_range(probe_json) is None:
+    if range_override is not None:
+        parts.append(f"range={range_override}")
+    elif get_color_range(probe_json) is None:
         parts.append("range=pc")
     if not parts:
         return None
@@ -264,7 +281,11 @@ PROFILES: dict[str, EncodingProfile] = {
 }
 
 
-def with_setparams(profile: EncodingProfile, probe_json: ProbeDict | None = None) -> EncodingProfile:
+def with_setparams(
+    profile: EncodingProfile,
+    probe_json: ProbeDict | None = None,
+    range_override: RangeOverride | None = None,
+) -> EncodingProfile:
     """Prepend a ``setparams`` colour-metadata filter to *profile*.
 
     Parameters
@@ -278,16 +299,22 @@ def with_setparams(profile: EncodingProfile, probe_json: ProbeDict | None = None
         respecting any color metadata the source already declares.  When
         ``None``, every field is set to the AIND default — useful when the
         caller knows the source is fully untagged or doesn't want to probe.
+    range_override : {"pc", "tv"} | None
+        When set, force the ``range=`` field of the prepended setparams clause
+        to this value.  Use ``"tv"`` for sources known to be TV-range encoded
+        but tagged otherwise (e.g. the AIND mpeg4 yuv420p subset).  Defaults to
+        ``None``, which falls back to the source tag (or ``"pc"`` if untagged).
 
     Returns
     -------
     EncodingProfile
         A new profile with the setparams clause prepended to ``video_filters``,
         or the original profile unchanged when ``probe_json`` indicates the
-        source already carries all four color fields.
+        source already carries all four color fields and no ``range_override``
+        is requested.
     """
     if probe_json is not None:
-        sp = setparams_filter_for_source(probe_json)
+        sp = setparams_filter_for_source(probe_json, range_override=range_override)
         if sp is None:
             return profile
     else:
@@ -295,7 +322,8 @@ def with_setparams(profile: EncodingProfile, probe_json: ProbeDict | None = None
         # matches the bitstream truth for the typical untagged-yuv420p caller;
         # for gbrp callers without a probe, ``setparams`` is harmless metadata
         # (the scale step does RGB→YUV explicitly via ``out_color_matrix=``).
-        sp = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=pc"
+        range_value = range_override or "pc"
+        sp = f"setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range={range_value}"
     return profile.replace(
         video_filters=f"{sp},{profile.video_filters}",
     )

@@ -340,6 +340,56 @@ def test_with_setparams_probe_aware_unknown_treated_as_missing():
     assert "range=pc" in modified.video_filters
 
 
+def test_with_setparams_range_override_no_probe_uses_override():
+    """Without probe_json, range_override='tv' replaces the default range=pc."""
+    modified = with_setparams(OFFLINE_8BIT, range_override="tv")
+    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=tv,"
+    assert modified.video_filters.startswith(expected_prefix)
+
+
+def test_with_setparams_range_override_overrides_untagged_default():
+    """For an untagged source, range_override='tv' wins over the range=pc default."""
+    probe_json = _probe_json(pix_fmt="yuv420p")
+    modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
+    assert "range=tv" in modified.video_filters
+    assert "range=pc" not in modified.video_filters
+
+
+def test_with_setparams_range_override_overrides_source_tag():
+    """range_override forces the range field even when the source declares one
+    (the source's tag is wrong for AIND mpeg4 TV-range files; the override is
+    the authoritative manifest signal)."""
+    probe_json = _probe_json(
+        pix_fmt="yuv420p",
+        color_primaries="bt709",
+        color_transfer="bt709",
+        color_space="bt709",
+        color_range="pc",
+    )
+    modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
+    assert "range=tv" in modified.video_filters
+
+
+def test_with_setparams_range_override_fully_tagged_source_still_adds_setparams():
+    """When all source fields are tagged AND a range_override is requested, the
+    setparams clause is still prepended (it carries only the range= field)."""
+    probe_json = _probe_json(
+        pix_fmt="yuv420p",
+        color_primaries="bt709",
+        color_transfer="bt709",
+        color_space="bt709",
+        color_range="pc",
+    )
+    modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
+    assert modified.video_filters.startswith("setparams=range=tv,")
+
+
+def test_with_setparams_range_override_pc_explicit():
+    """range_override='pc' is a valid explicit value (equivalent to current default)."""
+    modified = with_setparams(OFFLINE_8BIT, range_override="pc")
+    assert "range=pc" in modified.video_filters
+
+
 def test_with_setparams_does_not_mutate_original():
     original_vf = OFFLINE_8BIT.video_filters
     with_setparams(OFFLINE_8BIT)

@@ -76,6 +76,14 @@ class TranscodeSettings(BaseSettings):
         False,
         description="Skip automatic setparams probing for missing color metadata.",
     )
+    range_override: Literal["pc", "tv"] | None = Field(
+        None,
+        description=(
+            "Force setparams range=pc or range=tv (overrides source tag and "
+            "the default range=pc fallback).  Use 'tv' for AIND mpeg4 yuv420p "
+            "sources that are TV-range encoded but tagged otherwise."
+        ),
+    )
     overwrite: bool = Field(False, description="Re-encode even if output exists.")
     jobs: int = Field(
         default_factory=lambda: max(1, (os.cpu_count() or 1) // 2),
@@ -223,6 +231,7 @@ class TranscodeSettings(BaseSettings):
                     dst,
                     profile=resolved,
                     auto_fix_colorspace=not self.no_auto_fix_colorspace,
+                    range_override=self.range_override,
                     on_progress=_on_frame,
                 )
 

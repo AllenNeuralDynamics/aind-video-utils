@@ -11,6 +11,7 @@ from aind_video_utils.encoding import (
     ONLINE_10BIT,
     SPEC_VERSION,
     EncodingProfile,
+    RangeOverride,
     with_setparams,
 )
 from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
@@ -30,6 +31,7 @@ __all__ = [
     "OFFLINE_10BIT",
     "ONLINE_8BIT",
     "ONLINE_10BIT",
+    "RangeOverride",
     "SPEC_VERSION",
     "with_setparams",
     # frames

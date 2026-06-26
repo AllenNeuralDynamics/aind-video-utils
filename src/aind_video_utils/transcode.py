@@ -10,7 +10,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from aind_video_utils.encoding import OFFLINE_8BIT, EncodingProfile, with_setparams
+from aind_video_utils.encoding import OFFLINE_8BIT, EncodingProfile, RangeOverride, with_setparams
 from aind_video_utils.probe import probe
 from aind_video_utils.utils import http_input_flags
 
@@ -33,6 +33,7 @@ def transcode_video(
     *,
     profile: EncodingProfile = OFFLINE_8BIT,
     auto_fix_colorspace: bool = True,
+    range_override: RangeOverride | None = None,
     no_audio: bool = True,
     on_progress: Callable[[int], None] | None = None,
 ) -> Path:
@@ -51,6 +52,12 @@ def transcode_video(
         ``setparams`` filter that fills in only the color-metadata fields the
         source has tagged as missing.  Set to ``False`` for exact control
         over filters (no setparams prepended at all).
+    range_override : {"pc", "tv"} | None
+        When set, force the ``range=`` field of the prepended setparams clause
+        to this value, overriding both the default ``range=pc`` and any range
+        tag carried by the source.  Use ``"tv"`` for AIND mpeg4 yuv420p
+        sources that are TV-range encoded.  Ignored when
+        ``auto_fix_colorspace=False``.
     no_audio : bool
         If ``True``, strip audio (``-an``).
     on_progress : Callable[[int], None] | None
@@ -69,7 +76,7 @@ def transcode_video(
     effective = profile
     if auto_fix_colorspace:
         probe_json = probe(input_path)
-        effective = with_setparams(profile, probe_json)
+        effective = with_setparams(profile, probe_json, range_override=range_override)
 
     cmd: list[str] = ["ffmpeg"]
     cmd.extend(http_input_flags(input_path))
