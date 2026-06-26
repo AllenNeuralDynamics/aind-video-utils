@@ -156,10 +156,11 @@ _AIND_METADATA: tuple[tuple[str, str], ...] = (("author", "Allen Institute for N
 
 OFFLINE_8BIT = EncodingProfile(
     video_filters=(
-        "scale=out_color_matrix=bt709:out_range=full:sws_dither=none,"
+        "scale=out_color_matrix=bt709:out_range=full"
+        ":flags=accurate_rnd+full_chroma_int+full_chroma_inp:sws_dither=none,"
         "format=yuv420p10le,"
         "colorspace=all=bt709:dither=none,"
-        "scale=out_range=tv:sws_dither=none,"
+        "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=ed,"
         "format=yuv420p"
     ),
     codec="libx264",
@@ -172,7 +173,11 @@ OFFLINE_8BIT = EncodingProfile(
 )
 
 OFFLINE_10BIT = EncodingProfile(
-    video_filters=("colorspace=all=bt709:dither=none,scale=out_range=tv:sws_dither=none,format=yuv420p10le"),
+    video_filters=(
+        "colorspace=all=bt709:dither=none,"
+        "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=none,"
+        "format=yuv420p10le"
+    ),
     codec="libx264",
     pixel_format="yuv420p10le",
     container="mp4",
