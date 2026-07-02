@@ -22,6 +22,7 @@ from aind_video_utils._rawvideo import (
 from aind_video_utils.probe import (
     ProbeDict,
     get_color_transfer,
+    get_duration_seconds,
     get_frame_dimensions,
     get_video_range_info,
     get_yuv_format,
@@ -30,6 +31,34 @@ from aind_video_utils.probe import (
 from aind_video_utils.utils import http_input_flags
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_frame_time(probe_json: ProbeDict, requested: float) -> float:
+    """Clamp ``requested`` to lie within the video's actual duration.
+
+    Very short sources (test clips) can be shorter than a QC's target
+    timestamp; without a clamp ffmpeg seeks past EOF and returns rc=1
+    with no output. Falls back to ``requested`` unchanged when duration
+    cannot be resolved from probe metadata.
+    """
+    duration = get_duration_seconds(probe_json)
+    if duration is None or requested <= duration:
+        return requested
+    # Back off one frame-period-ish from the end. r_frame_rate gives fps;
+    # if unavailable, use a 10 ms epsilon (finer grain isn't meaningful for
+    # frame seeking).
+    stream = probe_json["streams"][0]
+    epsilon = 0.010
+    rate = stream.get("r_frame_rate")
+    if rate:
+        try:
+            num, den = rate.split("/")
+            fps = int(num) / int(den)
+            if fps > 0:
+                epsilon = 1.0 / fps
+        except (ValueError, ZeroDivisionError):
+            pass
+    return max(0.0, duration - epsilon)
 
 
 def extract_srgb_frame(
@@ -58,7 +87,8 @@ def extract_srgb_frame(
     probe_json = probe(video_path)
     pix_fmt = get_yuv_format(probe_json)
     w, h = get_frame_dimensions(probe_json)
-    ms_string = utils.get_millisecond_string(frame_time)
+    effective_time = _effective_frame_time(probe_json, frame_time)
+    ms_string = utils.get_millisecond_string(effective_time)
     base_colorspace_filter = "colorspace=trc=srgb:space=bt709:primaries=bt709:range=pc,format=rgb24"
     # Both the GBR (zscale) and YUV (colorspace filter) branches need the
     # source's transfer characteristic to resolve a path. AIND mpeg4 and
@@ -159,7 +189,8 @@ def extract_luma_frame(
     if not (format_is_8_bit or pix_fmt in _ALL_SUPPORTED_FORMATS_10BIT):
         raise ValueError(f"Unsupported pixel format: {pix_fmt}")
     w, h = get_frame_dimensions(probe_json)
-    ms_string = utils.get_millisecond_string(frame_time)
+    effective_time = _effective_frame_time(probe_json, frame_time)
+    ms_string = utils.get_millisecond_string(effective_time)
 
     if _is_gbr_format(pix_fmt):
         # For GBR formats, use ffmpeg to compute BT.709 luminance

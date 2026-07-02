@@ -179,6 +179,40 @@ def get_color_transfer(probe_json: ProbeDict) -> str | None:
     return str(color_trc)
 
 
+def get_duration_seconds(probe_json: ProbeDict) -> float | None:
+    """Return the first video stream's duration in seconds.
+
+    Tries the stream's ``duration`` field directly; falls back to
+    ``nb_frames / r_frame_rate`` when only the frame count is known.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    float | None
+        Duration in seconds, or ``None`` when unavailable.
+    """
+    stream = probe_json["streams"][0]
+    raw = stream.get("duration")
+    if raw is not None and raw != "N/A":
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    nb = stream.get("nb_frames")
+    if nb is not None and nb != "N/A" and stream.get("r_frame_rate"):
+        try:
+            num, den = stream["r_frame_rate"].split("/")
+            fps = int(num) / int(den)
+            return int(nb) / fps
+        except (ValueError, ZeroDivisionError):
+            pass
+    return None
+
+
 def get_nb_frames(probe_json: ProbeDict) -> int | None:
     """Return the frame count from the first video stream.
 
