@@ -23,6 +23,11 @@ def main() -> None:
     p_compare.add_argument("input_video", type=Path, help="Path to the input video.")
     p_compare.add_argument("output_video", type=Path, help="Path to the output video.")
     p_compare.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
+    # Input is assumed linear light by default (AIND convention). --coerce is
+    # accepted for backward compatibility (it is now the default); --no-coerce
+    # opts out to trust the input's color-space tags instead.
+    p_compare.set_defaults(coerce=True)
+    p_compare.add_argument("--coerce", dest="coerce", action="store_true", help=argparse.SUPPRESS)
     p_compare.add_argument(
         "--no-coerce",
         dest="coerce",
@@ -77,7 +82,10 @@ def main() -> None:
             transcode_qc_figure,
         )
     except ImportError:
-        print("Error: plotting dependencies not installed. Run: pip install aind-video-utils[plotting]", file=sys.stderr)
+        print(
+            "Error: plotting dependencies not installed. Run: pip install aind-video-utils[plotting]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.command == "linear-to-bt709":
