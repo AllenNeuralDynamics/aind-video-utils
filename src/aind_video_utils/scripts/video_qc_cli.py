@@ -23,7 +23,25 @@ def main() -> None:
     p_compare.add_argument("input_video", type=Path, help="Path to the input video.")
     p_compare.add_argument("output_video", type=Path, help="Path to the output video.")
     p_compare.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
-    p_compare.add_argument("--coerce", action="store_true", help="Coerce input color space to linear.")
+    p_compare.add_argument(
+        "--no-coerce",
+        dest="coerce",
+        action="store_false",
+        help="Trust the input's color-space tags instead of assuming linear light.",
+    )
+    p_compare.add_argument(
+        "--range-override",
+        choices=["pc", "tv"],
+        default=None,
+        help="Authoritative input range ('pc'=full, 'tv'=limited); overrides source tags.",
+    )
+    p_compare.add_argument("--rig-group", default=None, help="Rig group label shown in the summary table.")
+    p_compare.add_argument(
+        "--noise-frames",
+        type=int,
+        default=8,
+        help="Number of frames sampled for the noise-transfer gamma test (default: 8).",
+    )
     p_compare.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path.")
     p_compare.add_argument("--dpi", type=int, default=180, help="Output DPI (default: 180).")
 
@@ -50,10 +68,13 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        import matplotlib
+
+        matplotlib.use("Agg")  # save-to-PNG CLI: never require a display (runs headless on EC2)
         from aind_video_utils.video_qc import (
             check_color_range,
-            compare_linear_to_bt709,
             compare_luma_opencv_frames,
+            transcode_qc_figure,
         )
     except ImportError:
         print("Error: plotting dependencies not installed. Run: pip install aind-video-utils[plotting]", file=sys.stderr)
@@ -61,10 +82,13 @@ def main() -> None:
 
     if args.command == "linear-to-bt709":
         output_path = args.output or Path(f"{args.input_video.stem}_qc.png")
-        fig = compare_linear_to_bt709(
+        fig = transcode_qc_figure(
             args.input_video,
             args.output_video,
             args.frame_time,
+            range_override=args.range_override,
+            rig_group=args.rig_group,
+            noise_frames=args.noise_frames,
             coerce_input_color_space=args.coerce,
         )
     elif args.command == "opencv":

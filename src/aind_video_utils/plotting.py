@@ -272,6 +272,7 @@ def intensity_histogram(  # noqa: C901
     show_xlabel: bool = True,
     show_ylabel: bool = True,
     show_stems: bool = False,
+    shade_regions: list[tuple[float, float, str]] | None = None,
 ) -> Axes:
     """
     Plot intensity histogram with Tufte-style stems and optional dual-scale.
@@ -310,6 +311,10 @@ def intensity_histogram(  # noqa: C901
         Whether to show axis labels.
     show_stems
         If True, draw stem lines from zero to each dot. If False, show dots only.
+    shade_regions
+        Optional list of ``(lo, hi, color)`` spans shaded behind the histogram
+        along the intensity axis (e.g. the TV reserved zones for the
+        cliff-range panel). Empty/None leaves the plot unchanged.
 
     Returns
     -------
@@ -511,6 +516,12 @@ def intensity_histogram(  # noqa: C901
                 linewidth=1,
                 alpha=0.7,
             )
+
+    # Shaded reference regions (e.g. TV reserved zones) behind the histogram
+    if shade_regions:
+        for span_lo, span_hi, span_color in shade_regions:
+            span_fn = ax.axhspan if is_vertical else ax.axvspan
+            span_fn(span_lo, span_hi, color=span_color, alpha=0.12, zorder=0)
 
     return ax
 
