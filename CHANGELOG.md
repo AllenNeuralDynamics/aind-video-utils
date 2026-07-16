@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.6.0 (2026-07-16)
+
+### Feat
+
+- **video_qc**: add transcode QC figure with range/gamma calls
+
+### Fix
+
+- **video_qc**: satisfy py3.10 mypy and no-extras wheel smoke-test
+- **video_qc-cli**: keep --coerce accepted as a backward-compat alias
+- **frames**: clamp frame_time to actual video duration
+
 ## v0.5.0 (2026-06-26)
 
 ### Feat
