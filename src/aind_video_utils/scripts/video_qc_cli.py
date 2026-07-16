@@ -5,6 +5,23 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+def _path_or_url(value: str) -> str | Path:
+    """Keep HTTP(S) URLs as ``str``; wrap local paths as ``Path``.
+
+    ``argparse type=Path`` on a URL collapses ``https://`` to ``https:/`` (Path
+    normalizes ``//``), which mangles the URL passed to ffmpeg and defeats the
+    ``http_input_flags`` URL check (so ``-reconnect`` is never added, and deep
+    remote seeks fail). Preserve URLs verbatim.
+    """
+    return value if value.startswith(("http://", "https://")) else Path(value)
+
+
+def _stem(video: "str | Path") -> str:
+    """Filename stem for a URL or local path (for default output naming)."""
+    return Path(urlparse(video).path).stem if isinstance(video, str) else video.stem
 
 
 def main() -> None:
@@ -20,8 +37,8 @@ def main() -> None:
         "linear-to-bt709",
         help="Compare linear-light input against BT.709-encoded output.",
     )
-    p_compare.add_argument("input_video", type=Path, help="Path to the input video.")
-    p_compare.add_argument("output_video", type=Path, help="Path to the output video.")
+    p_compare.add_argument("input_video", type=_path_or_url, help="Path to the input video.")
+    p_compare.add_argument("output_video", type=_path_or_url, help="Path to the output video.")
     p_compare.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
     # Input is assumed linear light by default (AIND convention). --coerce is
     # accepted for backward compatibility (it is now the default); --no-coerce
@@ -55,7 +72,7 @@ def main() -> None:
         "opencv",
         help="Compare ffmpeg luma extraction with OpenCV decode.",
     )
-    p_opencv.add_argument("input_video", type=Path, help="Path to the input video.")
+    p_opencv.add_argument("input_video", type=_path_or_url, help="Path to the input video.")
     p_opencv.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
     p_opencv.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path.")
     p_opencv.add_argument("--dpi", type=int, default=180, help="Output DPI (default: 180).")
@@ -65,7 +82,7 @@ def main() -> None:
         "color-range",
         help="Check if pixel data matches color range metadata.",
     )
-    p_color.add_argument("input_video", type=Path, help="Path to the input video.")
+    p_color.add_argument("input_video", type=_path_or_url, help="Path to the input video.")
     p_color.add_argument("--frame-time", type=float, default=0, help="Time in seconds (default: 0).")
     p_color.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path.")
     p_color.add_argument("--dpi", type=int, default=180, help="Output DPI (default: 180).")
@@ -89,7 +106,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.command == "linear-to-bt709":
-        output_path = args.output or Path(f"{args.input_video.stem}_qc.png")
+        output_path = args.output or Path(f"{_stem(args.input_video)}_qc.png")
         fig = transcode_qc_figure(
             args.input_video,
             args.output_video,
@@ -100,13 +117,13 @@ def main() -> None:
             coerce_input_color_space=args.coerce,
         )
     elif args.command == "opencv":
-        output_path = args.output or Path(f"{args.input_video.stem}_opencv_qc.png")
+        output_path = args.output or Path(f"{_stem(args.input_video)}_opencv_qc.png")
         fig = compare_luma_opencv_frames(
             args.input_video,
             frame_time=args.frame_time,
         )
     else:  # color-range
-        output_path = args.output or Path(f"{args.input_video.stem}_color_range_qc.png")
+        output_path = args.output or Path(f"{_stem(args.input_video)}_color_range_qc.png")
         fig = check_color_range(
             args.input_video,
             frame_time=args.frame_time,

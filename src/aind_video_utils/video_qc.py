@@ -438,6 +438,8 @@ def noise_transfer_curve(
         flat = (gx + gy) < flat_gradient_max
         means.append(local[flat])
         resids.append(highpass[flat])
+    if not means:  # all frames failed to read / no flat regions -> no curve
+        return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
     mean_all = np.concatenate(means)
     resid_all = np.concatenate(resids)
     edges = np.unique(np.quantile(mean_all, np.linspace(0.02, 0.98, n_bins + 1)))
@@ -546,7 +548,12 @@ def transcode_qc_figure(
     srgb_after = extract_srgb_frame(output_video_path, frame_time, False)
 
     noise_ts = _noise_timestamps(in_probe, noise_frames)
-    noise_planes = [extract_luma_frame(input_video_path, float(t), in_probe)[0].astype(np.float64) for t in noise_ts]
+    noise_planes: list[NDArray[np.float64]] = []
+    for t in noise_ts:
+        try:
+            noise_planes.append(extract_luma_frame(input_video_path, float(t), in_probe)[0].astype(np.float64))
+        except Exception:  # a deep remote seek can fail transiently; drop that sample rather than crash
+            continue
     mean, variance = noise_transfer_curve(noise_planes)
     verdict = classify_gamma(mean, variance)
     gamma_call = str(verdict["call"])
