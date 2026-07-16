@@ -62,7 +62,10 @@ def _effective_frame_time(probe_json: ProbeDict, requested: float) -> float:
 
 
 def extract_srgb_frame(
-    video_path: str | Path, frame_time: float, coerce_input_color_space: bool = False
+    video_path: str | Path,
+    frame_time: float,
+    coerce_input_color_space: bool = False,
+    input_is_full: bool = True,
 ) -> npt.NDArray[np.uint8]:
     """Extract a single frame from a video, converted to sRGB RGB24.
 
@@ -78,6 +81,12 @@ def extract_srgb_frame(
     coerce_input_color_space : bool, optional
         If True, override the stream's transfer characteristic metadata
         (assume linear light input).
+    input_is_full : bool, optional
+        Declared luma range of the *input* when coercing color space: ``True``
+        (default) tags it full/PC, ``False`` tags it limited/TV. Only affects the
+        coerced YUV path (the ``setparams`` range); a limited-range source read as
+        PC would lift its blacks. AIND linear sources are PC, but mpeg4 yuv420p
+        sources are actually TV (see the mpeg4 TV-range fix) — pass ``False`` there.
 
     Returns
     -------
@@ -123,8 +132,10 @@ def extract_srgb_frame(
         # so tag it explicitly. Caught 2026-06-25 while QCing the smoke
         # batch — input sRGB extraction was 30 codes darker than the
         # otherwise-identical output sRGB, all from this missing tag.
+        setparams_range = "pc" if input_is_full else "tv"
         video_filter = (
-            "setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range=pc," + base_colorspace_filter
+            f"setparams=color_primaries=bt709:color_trc=linear:colorspace=bt709:range={setparams_range},"
+            + base_colorspace_filter
         )
     else:
         video_filter = base_colorspace_filter

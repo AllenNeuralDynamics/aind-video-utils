@@ -542,7 +542,7 @@ def transcode_qc_figure(
 
     before_luma, _, _ = extract_luma_frame(input_video_path, frame_time, in_probe)
     after_luma, _, _ = extract_luma_frame(output_video_path, frame_time)
-    srgb_before = extract_srgb_frame(input_video_path, frame_time, coerce_input_color_space)
+    srgb_before = extract_srgb_frame(input_video_path, frame_time, coerce_input_color_space, input_is_full=is_full)
     srgb_after = extract_srgb_frame(output_video_path, frame_time, False)
 
     noise_ts = _noise_timestamps(in_probe, noise_frames)
