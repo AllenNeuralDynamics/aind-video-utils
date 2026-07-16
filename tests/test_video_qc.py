@@ -1,14 +1,17 @@
 """Tests for the transcode QC numeric helpers and the shade_regions plot option."""
 
-import matplotlib
+import numpy as np
+import pytest
 
+# The QC module imports matplotlib at import time; skip this whole module when the
+# plotting extra is absent (e.g. the no-extras wheel smoke-test in CI).
+matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib.pyplot as plt  # noqa: E402
 
-from aind_video_utils.plotting import intensity_histogram
-from aind_video_utils.video_qc import (
+from aind_video_utils.plotting import intensity_histogram  # noqa: E402
+from aind_video_utils.video_qc import (  # noqa: E402
     _box_mean,
     _oetf_derivative,
     _robust_variance,

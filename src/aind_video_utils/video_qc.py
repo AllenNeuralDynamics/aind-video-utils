@@ -501,7 +501,7 @@ def classify_gamma(
 def _noise_timestamps(input_probe: Any, n_frames: int) -> NDArray[np.float64]:
     """``n_frames`` timestamps spread across the source (fallback to a 60 s guess)."""
     duration = get_duration_seconds(input_probe) or 60.0
-    return np.linspace(0.05 * duration, 0.95 * duration, max(n_frames, 3))
+    return np.linspace(0.05 * duration, 0.95 * duration, max(n_frames, 3), dtype=np.float64)
 
 
 def transcode_qc_figure(
@@ -623,7 +623,7 @@ def transcode_qc_figure(
     ax_noise.plot(mean[~ok], variance[~ok], "o", color="0.78", ms=3)
     ax_noise.plot(mean[ok], variance[ok], "o", color="0.25", ms=3)
     if int(ok.sum()) >= 3:
-        grid = np.linspace(float(mean[ok].min()), float(mean[ok].max()), 60)
+        grid = np.linspace(float(mean[ok].min()), float(mean[ok].max()), 60, dtype=np.float64)
         a_mean, a_var = float(verdict["anchor_mean"]), float(verdict["anchor_var"])
         lin_curve = a_var * (grid / a_mean)
         gam_curve = a_var * bt709_noise_shape(grid) / float(bt709_noise_shape(np.array([a_mean]))[0])
