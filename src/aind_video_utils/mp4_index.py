@@ -301,19 +301,22 @@ class Mp4FrameIndex:
             raise ValueError(f"no keyframe at or before decode_index {decode_index}")
         return int(keyframes[pos])
 
-    def seek_plan(self, display_index: int) -> tuple[float, int]:
-        """Return an ``(seek_seconds, frames_after_keyframe)`` plan for frame *display_index*.
+    def presentation_seconds(self, display_index: int) -> float:
+        """Return the exact input-side ``-ss`` seek time for frame *display_index*.
 
-        Encodes the verified frame-exact extraction recipe: seek an MP4 decoder
-        to ``seek_seconds`` with input-side ``-ss`` (which addresses the
-        *presentation* timeline), then decode ``frames_after_keyframe`` frames
-        forward — counting the landed keyframe as 0 — to reach *display_index*.
+        Feeds ``ffmpeg -ss <this> -accurate_seek``.  ffmpeg lands on exactly this
+        frame because it is addressed by its true presentation PTS — read from the
+        moov, with the edit list's ``media_time`` subtracted (a single trivial
+        ``elst`` maps that media time to presentation 0) — not by an assumed frame
+        rate.  Reading the real timeline is what makes the non-uniform
+        seam-glitch grid (see the module docstring) seek correctly: ffmpeg reads
+        the same ``ctts``/``stts`` and computes the same PTS, so any cumulative
+        drift cancels.
 
-        The seek targets the keyframe beginning *display_index*'s GOP.  Its
-        presentation time is the keyframe's media PTS minus the edit list's
-        ``media_time`` (a single trivial ``elst`` maps that media time to
-        presentation 0); without the subtraction the seek lands ``media_time``
-        ticks late.
+        Under the hood ffmpeg still seeks to the preceding keyframe and decodes
+        forward, discarding until it reaches this PTS — the same work the caller
+        would otherwise script by hand, but expressed on the clean, unambiguous
+        PTS axis.
 
         Parameters
         ----------
@@ -322,30 +325,31 @@ class Mp4FrameIndex:
 
         Returns
         -------
-        seek_seconds : float
-            Presentation-timeline time to pass to input-side ``-ss``.  Format
-            with enough decimals that it rounds to the exact media tick (``-ss``
-            lands on the nearest keyframe at or before the request).
-        frames_after_keyframe : int
-            Number of frames to decode past the keyframe to reach the target.
+        float
+            Presentation-timeline seconds to pass to input-side ``-ss``.
 
         Raises
         ------
         ValueError
-            If *display_index* is out of range, or the edit list is not
-            frame-addressing-safe (see :meth:`is_frame_addressing_safe`).
+            If *display_index* is out of range, the edit list is not
+            frame-addressing-safe (see :meth:`is_frame_addressing_safe`), or the
+            target's PTS is not strictly greater than its predecessor's — a
+            duplicate/non-monotonic timeline where a PTS seek would be ambiguous
+            (``-ss`` returns the *first* frame at or after the requested time).
         """
         if not 0 <= display_index < self.n_samples:
             raise ValueError(f"display_index {display_index} out of range [0, {self.n_samples})")
         if not self.is_frame_addressing_safe():
-            raise ValueError("edit list is not frame-addressing-safe; cannot derive a simple seek time")
+            raise ValueError("edit list is not frame-addressing-safe; cannot derive a seek time")
         order = self.display_order
-        decode_index = int(order[display_index])
-        keyframe = self.keyframe_at_or_before(decode_index)
-        keyframe_display_rank = int(np.flatnonzero(order == keyframe)[0])
+        target_pts = int(self.pts[int(order[display_index])])
+        if display_index > 0 and target_pts <= int(self.pts[int(order[display_index - 1])]):
+            raise ValueError(
+                f"frame {display_index} does not have a strictly greater PTS than its predecessor "
+                "(non-monotonic presentation timeline); a PTS seek would be ambiguous"
+            )
         media_time = self.edits[0].media_time if self.edits else 0
-        seek_seconds = (int(self.pts[keyframe]) - media_time) / self.media_timescale
-        return seek_seconds, display_index - keyframe_display_rank
+        return (target_pts - media_time) / self.media_timescale
 
     def is_frame_addressing_safe(self) -> bool:
         """Whether the edit list is safe to ignore for frame-index addressing.

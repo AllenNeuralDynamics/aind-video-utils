@@ -353,12 +353,13 @@ def test_tail_trim_is_unsafe():
 
 
 # ---------------------------------------------------------------------------
-# seek_plan (the verified frame-exact extraction recipe, computed on the index)
+# presentation_seconds (the exact -ss time addressed by the target's real PTS)
 # ---------------------------------------------------------------------------
 #
 # A reordered 2-GOP timeline: keyframes at decode 0 and 3, B-frame reordering
 # within each GOP, and (optionally) a trivial reorder-compensation edit
-# (media_time == 64 == min pts). display_order works out to [0, 2, 1, 3, 5, 4].
+# (media_time == 64 == min pts). display_order works out to [0, 2, 1, 3, 5, 4]
+# and the PTS in display order is [64, 96, 128, 160, 192, 224].
 def _reordered_index(edits: tuple[EditListEntry, ...] = ()) -> Mp4FrameIndex:
     return _index(
         pts=[64, 128, 96, 160, 224, 192],
@@ -370,43 +371,44 @@ def _reordered_index(edits: tuple[EditListEntry, ...] = ()) -> Mp4FrameIndex:
     )
 
 
-def test_seek_plan_display_order_is_reordered():
+def test_presentation_seconds_display_order_is_reordered():
     assert _reordered_index().display_order.tolist() == [0, 2, 1, 3, 5, 4]
 
 
-def test_seek_plan_subtracts_media_time_and_counts_from_keyframe():
+def test_presentation_seconds_subtracts_media_time():
     idx = _reordered_index(edits=(EditListEntry(1000, 64, 1.0),))
-    # display 5 -> decode 4, covering keyframe decode 3 (display rank 3).
-    # seek = (pts[3] - media_time)/ts = (160-64)/16000 = 0.006 ; count = 5-3 = 2
-    seek, count = idx.seek_plan(5)
-    assert seek == pytest.approx(0.006)
-    assert count == 2
+    # display 5 -> decode 4 (pts 224); (224 - media_time 64) / 16000 = 0.01
+    assert idx.presentation_seconds(5) == pytest.approx(0.01)
 
 
-def test_seek_plan_first_frame_seeks_to_zero():
+def test_presentation_seconds_first_frame_is_zero():
     idx = _reordered_index(edits=(EditListEntry(1000, 64, 1.0),))
-    seek, count = idx.seek_plan(0)
-    assert seek == pytest.approx(0.0)
-    assert count == 0
+    assert idx.presentation_seconds(0) == pytest.approx(0.0)
 
 
-def test_seek_plan_without_edit_list_uses_raw_pts():
-    idx = _reordered_index()  # no edits
-    # display 5 -> decode 4, keyframe decode 3, no media_time subtraction.
-    seek, count = idx.seek_plan(5)
-    assert seek == pytest.approx(160 / 16000)
-    assert count == 2
+def test_presentation_seconds_without_edit_list_uses_raw_pts():
+    idx = _reordered_index()  # no edits -> no media_time subtraction
+    assert idx.presentation_seconds(5) == pytest.approx(224 / 16000)
 
 
-def test_seek_plan_out_of_range_raises():
+def test_presentation_seconds_out_of_range_raises():
     with pytest.raises(ValueError, match="out of range"):
-        _reordered_index().seek_plan(6)
+        _reordered_index().presentation_seconds(6)
 
 
-def test_seek_plan_unsafe_edit_list_raises():
+def test_presentation_seconds_unsafe_edit_list_raises():
     idx = _reordered_index(edits=(EditListEntry(1000, 500, 1.0),))  # front trim
     with pytest.raises(ValueError, match="frame-addressing-safe"):
-        idx.seek_plan(2)
+        idx.presentation_seconds(2)
+
+
+def test_presentation_seconds_duplicate_pts_raises():
+    # Two frames share PTS 64: a PTS seek to frame 1 would return frame 0.
+    idx = _index(pts=[64, 64, 128], dts=[0, 32, 64])
+    assert idx.presentation_seconds(0) == pytest.approx(64 / 16000)
+    assert idx.presentation_seconds(2) == pytest.approx(128 / 16000)
+    with pytest.raises(ValueError, match="non-monotonic"):
+        idx.presentation_seconds(1)
 
 
 # ---------------------------------------------------------------------------

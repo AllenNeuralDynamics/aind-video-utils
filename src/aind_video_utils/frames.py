@@ -175,22 +175,22 @@ def extract_frame_by_index(
     """Extract the frame at presentation-order *display_index* from an MP4, frame-exact.
 
     Addresses frames by *number* rather than by time.  Reads the MP4 ``moov``
-    sample tables (see :func:`~aind_video_utils.read_mp4_frame_index`) to find
-    the keyframe beginning *display_index*'s GOP, seeks there with input-side
-    ``-ss``, and decodes forward to the target — the recipe verified to be
-    frame-exact, including the edit-list ``media_time`` compensation that a
-    naive time seek gets wrong.
+    sample tables (see :func:`~aind_video_utils.read_mp4_frame_index`) to get the
+    target frame's true presentation PTS, then seeks straight to it with an
+    accurate input-side ``-ss`` (ffmpeg jumps to the enclosing keyframe and
+    decodes forward internally).  Addressing by the container's real PTS — not an
+    assumed frame rate — is what makes this exact even on the non-uniform
+    seam-glitch timeline.
 
-    Requires a local, seekable, non-fragmented MP4 whose edit list is
-    frame-addressing-safe.  Returns a fast preview decode using ffmpeg's default
-    color conversion; for color-managed sRGB output use
-    :func:`extract_srgb_frame` at the seconds returned by the index's
-    ``seek_plan``.
+    Requires a local (or ``http(s)://``), seekable, non-fragmented MP4 whose edit
+    list is frame-addressing-safe.  Returns a fast preview decode using ffmpeg's
+    default color conversion; for color-managed sRGB output call
+    :func:`extract_srgb_frame` at ``index.presentation_seconds(display_index)``.
 
     Parameters
     ----------
     video_path : str | Path
-        Path to a local MP4/MOV file.
+        Path to, or ``http(s)://`` URL of, an MP4/MOV file.
     display_index : int
         0-based frame index in presentation order.
     index : Mp4FrameIndex, optional
@@ -207,12 +207,12 @@ def extract_frame_by_index(
     Raises
     ------
     ValueError
-        If *display_index* is out of range or the file's edit list is not
-        frame-addressing-safe.
+        If *display_index* is out of range, the file's edit list is not
+        frame-addressing-safe, or its presentation timeline is non-monotonic.
     """
     if index is None:
         index = read_mp4_frame_index(video_path)
-    seek_seconds, frames_after_keyframe = index.seek_plan(display_index)
+    seek_seconds = index.presentation_seconds(display_index)
     if probe_json is None:
         probe_json = probe(video_path)
     w, h = get_frame_dimensions(probe_json)
@@ -221,18 +221,19 @@ def extract_frame_by_index(
         "-hide_banner",
         "-loglevel",
         "error",
-        # 9 decimals rounds to the exact media tick, so -ss lands on the target
-        # keyframe rather than its predecessor.
+        "-accurate_seek",
+        # 9 decimals resolves the media tick exactly; -accurate_seek then decodes
+        # forward to this precise PTS rather than stopping at the keyframe.
         "-ss",
         f"{seek_seconds:.9f}",
         *http_input_flags(video_path),
         "-i",
         str(video_path),
         "-vf",
-        f"select=eq(n\\,{frames_after_keyframe}),format=rgb24",
+        "format=rgb24",
         "-frames:v",
         "1",
-        # passthrough so the implicit CFR vsync stage can't drop the selected
+        # passthrough so the implicit CFR vsync stage can't drop the target
         # frame based on its post-seek timestamp.
         "-vsync",
         "0",
