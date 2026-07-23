@@ -23,6 +23,22 @@ def get_millisecond_string(seconds: float) -> str:
     return f"{ms:f}".rstrip("0").rstrip(".") + "ms"
 
 
+def is_url(source: str | Path) -> bool:
+    """Return whether *source* is an HTTP(S) URL rather than a local path.
+
+    Parameters
+    ----------
+    source : str | Path
+        Video path or URL.
+
+    Returns
+    -------
+    bool
+        ``True`` for ``http://`` / ``https://`` sources, ``False`` otherwise.
+    """
+    return str(source).startswith(("http://", "https://"))
+
+
 def http_input_flags(source: str | Path) -> list[str]:
     """Return ffmpeg/ffprobe protocol flags for HTTP(S) sources.
 
@@ -39,7 +55,7 @@ def http_input_flags(source: str | Path) -> list[str]:
     list[str]
         Flags to splice before the input in an ffmpeg/ffprobe command.
     """
-    if str(source).startswith(("http://", "https://")):
+    if is_url(source):
         return [
             "-reconnect",
             "1",

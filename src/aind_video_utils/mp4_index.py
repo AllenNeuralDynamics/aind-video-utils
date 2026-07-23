@@ -9,10 +9,11 @@ only timestamp-based seeking, so this module reads the sample tables itself to
 recover the native frame index.
 
 This is a pure ``struct`` + numpy parser — no ffmpeg, no PyAV, no extra
-dependency.  It reads only the ``moov`` atom (a few MB), never the ``mdat``
-payload, so it is cheap even on multi-GB files.  It handles both 32-bit
-``stco`` and 64-bit ``co64`` chunk offsets — the latter is mandatory for files
-over 4 GB.
+dependency (URL support uses stdlib ``urllib``).  It reads only the ``moov``
+atom (a few MB), never the ``mdat`` payload, so it is cheap even on multi-GB
+files — including over HTTP(S), where it fetches the ``moov`` with ``Range``
+requests.  It handles both 32-bit ``stco`` and 64-bit ``co64`` chunk offsets —
+the latter is mandatory for files over 4 GB.
 
 The index is immune to the glitchy-PTS problem that afflicts concat-seam
 timelines: presentation order is recovered by *sorting* PTS (a stable argsort),
@@ -22,15 +23,111 @@ never touch a timestamp at all.
 
 from __future__ import annotations
 
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
 
+from aind_video_utils.utils import is_url
+
 # ISO-BMFF video handler type (mdia/hdlr).
 _VIDE_HANDLER = b"vide"
+
+# Seconds before an HTTP range request is abandoned.
+_HTTP_TIMEOUT = 30
+
+
+class _ByteSource(Protocol):
+    """Random-access byte source: a local file or an HTTP(S) range reader."""
+
+    @property
+    def size(self) -> int:
+        """Total size of the source in bytes."""
+        ...
+
+    def read_at(self, offset: int, length: int) -> bytes:
+        """Return *length* bytes starting at *offset*."""
+        ...
+
+    def close(self) -> None:
+        """Release any held resources."""
+        ...
+
+
+class _LocalByteSource:
+    """Random access over a local seekable file."""
+
+    def __init__(self, path: Path) -> None:
+        self._handle = path.open("rb")
+        self._handle.seek(0, 2)
+        self._size = self._handle.tell()
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def read_at(self, offset: int, length: int) -> bytes:
+        self._handle.seek(offset)
+        return self._handle.read(length)
+
+    def close(self) -> None:
+        self._handle.close()
+
+
+class _HttpByteSource:
+    """Random access over an HTTP(S) URL via ``Range`` requests.
+
+    Fetches only the byte ranges asked for, so the multi-GB ``mdat`` payload is
+    never downloaded — only the (small, front-loaded on faststart files)
+    ``moov`` atom.  Requires a server that honours range requests (S3 and any
+    standard static host do).
+    """
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        # A 1-byte range probe both confirms range support and reports the
+        # total size via the Content-Range header.
+        request = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
+        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+            if response.status != 206:
+                raise ValueError(
+                    f"{url}: server does not support HTTP range requests "
+                    f"(status {response.status}); cannot read the moov remotely"
+                )
+            content_range = response.headers.get("Content-Range", "")
+            response.read()
+        total = content_range.rsplit("/", 1)[-1] if "/" in content_range else ""
+        if not total.isdigit():
+            raise ValueError(f"{url}: missing or unparseable Content-Range total: {content_range!r}")
+        self._size = int(total)
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def read_at(self, offset: int, length: int) -> bytes:
+        if length <= 0:
+            return b""
+        request = urllib.request.Request(self._url, headers={"Range": f"bytes={offset}-{offset + length - 1}"})
+        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+            if response.status != 206:
+                raise ValueError(f"{self._url}: expected 206 Partial Content, got {response.status}")
+            data: bytes = response.read()
+        return data
+
+    def close(self) -> None:  # nothing persistent to release
+        pass
+
+
+def _open_source(path: str | Path) -> _ByteSource:
+    """Open *path* as a local file or an HTTP(S) range source."""
+    if is_url(path):
+        return _HttpByteSource(str(path))
+    return _LocalByteSource(Path(path))
 
 
 @dataclass(frozen=True)
@@ -255,28 +352,34 @@ def _find_child(buf: bytes, start: int, end: int, box_type: bytes) -> tuple[int,
     return None
 
 
-def _locate_and_read_moov(path: Path) -> bytes:
-    """Return the ``moov`` box body, scanning top-level boxes without reading ``mdat``."""
-    with path.open("rb") as handle:
-        handle.seek(0, 2)
-        file_size = handle.tell()
-        handle.seek(0)
-        while True:
-            header = handle.read(8)
-            if len(header) < 8:
-                raise ValueError(f"{path}: reached end of file without finding a moov box")
-            size = int.from_bytes(header[0:4], "big")
-            box_type = header[4:8]
-            header_len = 8
-            box_start = handle.tell() - 8
-            if size == 1:
-                size = int.from_bytes(handle.read(8), "big")
-                header_len = 16
-            elif size == 0:
-                size = file_size - box_start
-            if box_type == b"moov":
-                return handle.read(size - header_len)
-            handle.seek(box_start + size)
+def _locate_and_read_moov(source: _ByteSource) -> bytes:
+    """Return the ``moov`` box body, scanning top-level boxes without reading ``mdat``.
+
+    Reads only box headers (16 bytes each) until ``moov`` is found, then fetches
+    just its body — so over HTTP this is a handful of small range requests plus
+    one for the moov itself, never the ``mdat`` payload.
+    """
+    file_size = source.size
+    offset = 0
+    while True:
+        header = source.read_at(offset, 16)
+        if len(header) < 8:
+            raise ValueError("reached end of source without finding a moov box")
+        size = int.from_bytes(header[0:4], "big")
+        box_type = header[4:8]
+        header_len = 8
+        if size == 1:
+            if len(header) < 16:
+                raise ValueError("truncated 64-bit box header")
+            size = int.from_bytes(header[8:16], "big")
+            header_len = 16
+        elif size == 0:
+            size = file_size - offset
+        if size < header_len:
+            raise ValueError(f"invalid box size {size} at offset {offset}")
+        if box_type == b"moov":
+            return source.read_at(offset + header_len, size - header_len)
+        offset += size
 
 
 def _box_version(buf: bytes, body_start: int) -> int:
@@ -465,16 +568,18 @@ def _find_video_stbl(moov: bytes) -> tuple[int, int, int, int, tuple[EditListEnt
 
 
 def read_mp4_frame_index(path: str | Path) -> Mp4FrameIndex:
-    """Parse the video sample tables of a local MP4 file into a frame index.
+    """Parse the video sample tables of an MP4 file into a frame index.
 
     Reads only the ``moov`` atom (not the ``mdat`` payload), so it is fast even
-    on multi-GB files.  Requires a local, seekable file — HTTP/URL inputs are
-    not supported (the parser needs random access to locate ``moov``).
+    on multi-GB files.  Accepts a local, seekable file or an HTTP(S) URL: URLs
+    are read with ``Range`` requests (the server must honour them, as S3 and
+    standard static hosts do), fetching only the ``moov`` — which sits at the
+    front of a faststart file — never the payload.
 
     Parameters
     ----------
     path : str | Path
-        Path to a non-fragmented MP4/MOV file.
+        Path to, or ``http(s)://`` URL of, a non-fragmented MP4/MOV file.
 
     Returns
     -------
@@ -485,10 +590,15 @@ def read_mp4_frame_index(path: str | Path) -> Mp4FrameIndex:
     Raises
     ------
     ValueError
-        If the file has no ``moov``, no video track, or a malformed sample
-        table (e.g. ``stts``/``stsc`` sample counts disagree with ``stsz``).
+        If the source has no ``moov``, no video track, a malformed sample table
+        (e.g. ``stts``/``stsc`` sample counts disagree with ``stsz``), or is a
+        URL whose server does not support range requests.
     """
-    moov = _locate_and_read_moov(Path(path))
+    source = _open_source(path)
+    try:
+        moov = _locate_and_read_moov(source)
+    finally:
+        source.close()
     stbl_start, stbl_end, timescale, duration, edits = _find_video_stbl(moov)
 
     mvhd = _find_child(moov, 0, len(moov), b"mvhd")

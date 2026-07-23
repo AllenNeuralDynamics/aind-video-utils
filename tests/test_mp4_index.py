@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import shutil
 import struct
 import subprocess
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -561,3 +565,90 @@ def test_read_mp4_frame_index_non_mp4_raises(tmp_path: Path) -> None:
     junk.write_bytes(b"this is definitely not an ISO base media file" * 4)
     with pytest.raises(ValueError, match="moov"):
         read_mp4_frame_index(junk)
+
+
+# ---------------------------------------------------------------------------
+# HTTP(S) support: read the moov over Range requests
+# ---------------------------------------------------------------------------
+
+
+class _RangeHandler(http.server.BaseHTTPRequestHandler):
+    """Serve a fixed payload, honouring (or refusing) Range requests."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:  # noqa: N802 (stdlib-mandated name)
+        data: bytes = self.server.payload  # type: ignore[attr-defined]
+        rng = self.headers.get("Range")
+        if self.server.support_range and rng and rng.startswith("bytes="):  # type: ignore[attr-defined]
+            start_s, _, end_s = rng[len("bytes=") :].partition("-")
+            start = int(start_s)
+            end = min(int(end_s), len(data) - 1) if end_s else len(data) - 1
+            chunk = data[start : end + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(len(chunk)))
+            self.end_headers()
+            self.wfile.write(chunk)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (match base signature)
+        pass
+
+
+@contextlib.contextmanager
+def _serve(payload: bytes, *, support_range: bool = True) -> Iterator[str]:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RangeHandler)
+    server.payload = payload  # type: ignore[attr-defined]
+    server.support_range = support_range  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/video.mp4"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _assert_index_equal(a: Mp4FrameIndex, b: Mp4FrameIndex) -> None:
+    assert (a.media_timescale, a.media_duration, a.movie_timescale) == (
+        b.media_timescale,
+        b.media_duration,
+        b.movie_timescale,
+    )
+    assert a.edits == b.edits
+    for field in ("dts", "pts", "is_keyframe", "byte_offset", "size"):
+        assert np.array_equal(getattr(a, field), getattr(b, field)), field
+
+
+@ffmpeg_required
+def test_read_mp4_frame_index_over_http_matches_local(tmp_path: Path) -> None:
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    local = read_mp4_frame_index(src)
+    with _serve(src.read_bytes()) as url:
+        remote = read_mp4_frame_index(url)
+    _assert_index_equal(local, remote)
+
+
+@ffmpeg_required
+def test_extract_frame_by_index_over_http(tmp_path: Path) -> None:
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    ground_truth = _decode_frame_from_zero(src, 20)
+    with _serve(src.read_bytes()) as url:
+        got = extract_frame_by_index(url, 20)
+    assert np.array_equal(got, ground_truth)
+
+
+def test_read_mp4_frame_index_over_http_rejects_non_range_server() -> None:
+    # No ffmpeg needed: the range probe fails before any MP4 parsing.
+    with _serve(b"x" * 4096, support_range=False) as url:
+        with pytest.raises(ValueError, match="range requests"):
+            read_mp4_frame_index(url)
