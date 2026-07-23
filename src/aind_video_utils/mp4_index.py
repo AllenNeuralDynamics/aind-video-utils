@@ -23,6 +23,10 @@ never touch a timestamp at all.
 
 from __future__ import annotations
 
+import http.client
+import random
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -37,8 +41,76 @@ from aind_video_utils.utils import is_url
 # ISO-BMFF video handler type (mdia/hdlr).
 _VIDE_HANDLER = b"vide"
 
-# Seconds before an HTTP range request is abandoned.
-_HTTP_TIMEOUT = 30
+# HTTP range-request resilience: matches the reconnect posture ffmpeg gets from
+# http_input_flags on the extraction side.
+_HTTP_TIMEOUT = 30  # seconds per attempt
+_HTTP_ATTEMPTS = 5
+_HTTP_BACKOFF_BASE = 0.5  # seconds; doubled each retry, full-jittered
+_HTTP_BACKOFF_MAX = 10.0
+# Transient HTTP statuses worth retrying (S3 emits 503 SlowDown under load).
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def _sleep_backoff(attempt: int) -> None:
+    """Sleep with exponential backoff and full jitter before the next attempt."""
+    ceiling = min(_HTTP_BACKOFF_MAX, _HTTP_BACKOFF_BASE * (2**attempt))
+    time.sleep(random.uniform(0, ceiling))
+
+
+def _range_request(url: str, start: int, end: int, *, expect_length: int | None = None) -> tuple[bytes, str]:
+    """Fetch ``bytes=start-end`` from *url*, retrying transient failures.
+
+    Returns ``(body, content_range_header)``.  Retries connection resets,
+    timeouts, TLS errors, truncated reads, and 408/429/5xx responses with
+    exponential backoff.  Raises immediately on permanent errors — 403/404/416,
+    or a ``200`` that means the server ignored the ``Range`` header (which would
+    otherwise stream the whole file).
+
+    Parameters
+    ----------
+    url : str
+        Source URL.
+    start, end : int
+        Inclusive byte range (``bytes=start-end``).
+    expect_length : int, optional
+        When given, a response body of a different length is treated as a
+        truncated read and retried — a moov parsed from short bytes is silently
+        corrupt.
+
+    Raises
+    ------
+    ValueError
+        If the server does not honour range requests (non-206 response).
+    ConnectionError
+        If every attempt fails with a transient error.
+    urllib.error.HTTPError
+        On a permanent HTTP error status.
+    """
+    range_header = f"bytes={start}-{end}"
+    last_error: Exception | None = None
+    for attempt in range(_HTTP_ATTEMPTS):
+        try:
+            request = urllib.request.Request(url, headers={"Range": range_header})
+            with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+                if response.status != 206:
+                    raise ValueError(
+                        f"{url}: server does not support HTTP range requests "
+                        f"(status {response.status}); cannot read the moov remotely"
+                    )
+                content_range = response.headers.get("Content-Range", "")
+                body: bytes = response.read()
+            if expect_length is not None and len(body) != expect_length:
+                raise OSError(f"{url}: truncated range read, got {len(body)} of {expect_length} bytes")
+            return body, content_range
+        except urllib.error.HTTPError as error:
+            if error.code not in _RETRYABLE_STATUS:
+                raise
+            last_error = error
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+            last_error = error
+        if attempt < _HTTP_ATTEMPTS - 1:
+            _sleep_backoff(attempt)
+    raise ConnectionError(f"{url}: HTTP range request failed after {_HTTP_ATTEMPTS} attempts") from last_error
 
 
 class _ByteSource(Protocol):
@@ -83,23 +155,17 @@ class _HttpByteSource:
 
     Fetches only the byte ranges asked for, so the multi-GB ``mdat`` payload is
     never downloaded — only the (small, front-loaded on faststart files)
-    ``moov`` atom.  Requires a server that honours range requests (S3 and any
-    standard static host do).
+    ``moov`` atom.  Bytes live in RAM for the duration of a single ``read_at``;
+    nothing is cached to disk or reused between calls.  Requires a server that
+    honours range requests (S3 and any standard static host do).  Transient
+    failures are retried with backoff (see :func:`_range_request`).
     """
 
     def __init__(self, url: str) -> None:
         self._url = url
         # A 1-byte range probe both confirms range support and reports the
         # total size via the Content-Range header.
-        request = urllib.request.Request(url, headers={"Range": "bytes=0-0"})
-        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-            if response.status != 206:
-                raise ValueError(
-                    f"{url}: server does not support HTTP range requests "
-                    f"(status {response.status}); cannot read the moov remotely"
-                )
-            content_range = response.headers.get("Content-Range", "")
-            response.read()
+        _body, content_range = _range_request(url, 0, 0)
         total = content_range.rsplit("/", 1)[-1] if "/" in content_range else ""
         if not total.isdigit():
             raise ValueError(f"{url}: missing or unparseable Content-Range total: {content_range!r}")
@@ -112,12 +178,8 @@ class _HttpByteSource:
     def read_at(self, offset: int, length: int) -> bytes:
         if length <= 0:
             return b""
-        request = urllib.request.Request(self._url, headers={"Range": f"bytes={offset}-{offset + length - 1}"})
-        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-            if response.status != 206:
-                raise ValueError(f"{self._url}: expected 206 Partial Content, got {response.status}")
-            data: bytes = response.read()
-        return data
+        body, _content_range = _range_request(self._url, offset, offset + length - 1, expect_length=length)
+        return body
 
     def close(self) -> None:  # nothing persistent to release
         pass

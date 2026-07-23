@@ -8,6 +8,7 @@ import shutil
 import struct
 import subprocess
 import threading
+import urllib.error
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import numpy as np
 import pytest
 
 from aind_video_utils import EditListEntry, Mp4FrameIndex, extract_frame_by_index, read_mp4_frame_index
+from aind_video_utils import mp4_index as mp4_index_mod
 from aind_video_utils.mp4_index import (
     _chunk_offsets,
     _composition_offsets,
@@ -572,15 +574,29 @@ def test_read_mp4_frame_index_non_mp4_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _send_status_only(handler: http.server.BaseHTTPRequestHandler, status: int) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Length", "0")
+    handler.end_headers()
+
+
 class _RangeHandler(http.server.BaseHTTPRequestHandler):
-    """Serve a fixed payload, honouring (or refusing) Range requests."""
+    """Serve a fixed payload with configurable Range support and injected faults."""
 
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib-mandated name)
-        data: bytes = self.server.payload  # type: ignore[attr-defined]
+        server = self.server
+        if server.always_status:  # type: ignore[attr-defined]
+            _send_status_only(self, server.always_status)  # type: ignore[attr-defined]
+            return
+        if server.fail_remaining > 0:  # type: ignore[attr-defined]
+            server.fail_remaining -= 1  # type: ignore[attr-defined]
+            _send_status_only(self, 503)  # transient
+            return
+        data: bytes = server.payload  # type: ignore[attr-defined]
         rng = self.headers.get("Range")
-        if self.server.support_range and rng and rng.startswith("bytes="):  # type: ignore[attr-defined]
+        if server.support_range and rng and rng.startswith("bytes="):  # type: ignore[attr-defined]
             start_s, _, end_s = rng[len("bytes=") :].partition("-")
             start = int(start_s)
             end = min(int(end_s), len(data) - 1) if end_s else len(data) - 1
@@ -602,10 +618,19 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def _serve(payload: bytes, *, support_range: bool = True) -> Iterator[str]:
+def _serve(
+    payload: bytes,
+    *,
+    support_range: bool = True,
+    fail_times: int = 0,
+    always_status: int = 0,
+) -> Iterator[str]:
+    """Serve *payload* over HTTP. ``fail_times`` initial GETs return 503; ``always_status`` overrides all."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RangeHandler)
     server.payload = payload  # type: ignore[attr-defined]
     server.support_range = support_range  # type: ignore[attr-defined]
+    server.fail_remaining = fail_times  # type: ignore[attr-defined]
+    server.always_status = always_status  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -651,4 +676,33 @@ def test_read_mp4_frame_index_over_http_rejects_non_range_server() -> None:
     # No ffmpeg needed: the range probe fails before any MP4 parsing.
     with _serve(b"x" * 4096, support_range=False) as url:
         with pytest.raises(ValueError, match="range requests"):
+            read_mp4_frame_index(url)
+
+
+@ffmpeg_required
+def test_read_mp4_frame_index_over_http_retries_transient_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mp4_index_mod, "_HTTP_BACKOFF_BASE", 0.0)  # no real sleeping
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    local = read_mp4_frame_index(src)
+    # First two GETs return 503; the retry loop must push through to a match.
+    with _serve(src.read_bytes(), fail_times=2) as url:
+        remote = read_mp4_frame_index(url)
+    _assert_index_equal(local, remote)
+
+
+def test_read_mp4_frame_index_over_http_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mp4_index_mod, "_HTTP_BACKOFF_BASE", 0.0)
+    # More consecutive 503s than the retry budget -> a clear failure, not a hang.
+    with _serve(b"x" * 16, fail_times=99) as url:
+        with pytest.raises(ConnectionError, match="after 5 attempts"):
+            read_mp4_frame_index(url)
+
+
+def test_read_mp4_frame_index_over_http_permanent_error_not_retried() -> None:
+    # A 404 is permanent: raised immediately, never retried.
+    with _serve(b"x" * 16, always_status=404) as url:
+        with pytest.raises(urllib.error.HTTPError):
             read_mp4_frame_index(url)
