@@ -641,8 +641,24 @@ def transcode_qc_figure(
         )
         gj = len(grid) // 4
         ax_noise.text(grid[gj], gam_curve[gj], " BT709", color=_OVER_COLOR, fontsize=8, va="bottom", fontstyle="italic")
-    ax_noise.set_xscale("log")
-    ax_noise.set_yscale("log")
+    # Log scale needs positive data; a degenerate/empty noise curve (e.g. a video
+    # with no flat regions, or all noise frames unreadable) would otherwise make
+    # matplotlib raise "Data has no positive values" at draw time.
+    if mean.size and np.any(mean > 0) and np.any(variance > 0):
+        ax_noise.set_xscale("log")
+        ax_noise.set_yscale("log")
+    else:
+        ax_noise.text(
+            0.5,
+            0.5,
+            "insufficient noise samples",
+            transform=ax_noise.transAxes,
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="0.5",
+            fontstyle="italic",
+        )
     ax_noise.set_xlabel("intensity mean (DN)")
     ax_noise.set_ylabel("noise variance (DN²)")
     ax_noise.set_title(

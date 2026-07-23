@@ -14,8 +14,16 @@ from aind_video_utils.encoding import (
     RangeOverride,
     with_setparams,
 )
-from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
-from aind_video_utils.probe import get_color_transfer, get_frame_dimensions, get_nb_frames, get_video_range_info, probe
+from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
+from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, read_mp4_frame_index
+from aind_video_utils.probe import (
+    get_color_transfer,
+    get_frame_dimensions,
+    get_nb_frames,
+    get_r_frame_rate,
+    get_video_range_info,
+    probe,
+)
 from aind_video_utils.transcode import VIDEO_EXTENSIONS, transcode_video
 
 try:
@@ -35,12 +43,18 @@ __all__ = [
     "SPEC_VERSION",
     "with_setparams",
     # frames
+    "extract_frame_by_index",
     "extract_luma_frame",
     "extract_srgb_frame",
+    # mp4_index
+    "EditListEntry",
+    "Mp4FrameIndex",
+    "read_mp4_frame_index",
     # probe
     "get_color_transfer",
     "get_frame_dimensions",
     "get_nb_frames",
+    "get_r_frame_rate",
     "get_video_range_info",
     "probe",
     # _rawvideo
