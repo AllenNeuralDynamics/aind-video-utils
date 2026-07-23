@@ -3,27 +3,19 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from aind_video_utils._rawvideo import pix_format_bit_depth
-from aind_video_utils.color_spaces import linear_to_rec_709_trc, luma_range, rec_709_trc_to_linear
-from aind_video_utils.encoding import (
-    OFFLINE_8BIT,
-    OFFLINE_10BIT,
-    ONLINE_8BIT,
-    ONLINE_10BIT,
-    SPEC_VERSION,
-    EncodingProfile,
-    RangeOverride,
-    with_setparams,
-)
-from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
-from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, read_mp4_frame_index
-from aind_video_utils.probe import (
-    get_color_transfer,
-    get_frame_dimensions,
-    get_nb_frames,
-    get_r_frame_rate,
-    get_video_range_info,
-    probe,
-)
+from aind_video_utils.color_spaces import (linear_to_rec_709_trc, luma_range,
+                                           rec_709_trc_to_linear)
+from aind_video_utils.encoding import (OFFLINE_8BIT, OFFLINE_10BIT,
+                                       ONLINE_8BIT, ONLINE_10BIT, SPEC_VERSION,
+                                       EncodingProfile, RangeOverride,
+                                       with_setparams)
+from aind_video_utils.frames import (extract_frame_by_index,
+                                     extract_luma_frame, extract_srgb_frame)
+from aind_video_utils.mp4_index import (EditListEntry, Mp4FrameIndex,
+                                        read_mp4_frame_index)
+from aind_video_utils.probe import (get_color_transfer, get_frame_dimensions,
+                                    get_nb_frames, get_r_frame_rate,
+                                    get_video_range_info, probe)
 from aind_video_utils.transcode import VIDEO_EXTENSIONS, transcode_video
 
 try:
