@@ -168,7 +168,7 @@ class _HttpByteSource:
         _body, content_range = _range_request(url, 0, 0)
         total = content_range.rsplit("/", 1)[-1] if "/" in content_range else ""
         if not total.isdigit():
-            raise ValueError(f"{url}: missing or unparseable Content-Range total: {content_range!r}")
+            raise ValueError(f"{url}: missing or unparsable Content-Range total: {content_range!r}")
         self._size = int(total)
 
     @property

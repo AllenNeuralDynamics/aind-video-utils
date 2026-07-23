@@ -231,7 +231,7 @@ def get_r_frame_rate(probe_json: ProbeDict) -> tuple[int, int] | None:
     -------
     tuple[int, int] | None
         ``(numerator, denominator)``, or ``None`` when the field is absent,
-        unparseable, or degenerate (``"0/0"``).
+        unparsable, or degenerate (``"0/0"``).
     """
     rate = probe_json["streams"][0].get("r_frame_rate")
     if not rate or rate == "N/A":

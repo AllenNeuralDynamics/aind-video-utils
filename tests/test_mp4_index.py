@@ -587,7 +587,7 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
 
-    def do_GET(self) -> None:  # noqa: N802 (stdlib-mandated name)
+    def do_GET(self) -> None:
         server = self.server
         if server.always_status:  # type: ignore[attr-defined]
             _send_status_only(self, server.always_status)  # type: ignore[attr-defined]
@@ -615,7 +615,7 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (match base signature)
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
 
