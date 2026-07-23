@@ -15,7 +15,14 @@ from aind_video_utils.encoding import (
     with_setparams,
 )
 from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
-from aind_video_utils.probe import get_color_transfer, get_frame_dimensions, get_nb_frames, get_video_range_info, probe
+from aind_video_utils.probe import (
+    get_color_transfer,
+    get_frame_dimensions,
+    get_nb_frames,
+    get_r_frame_rate,
+    get_video_range_info,
+    probe,
+)
 from aind_video_utils.transcode import VIDEO_EXTENSIONS, transcode_video
 
 try:
@@ -41,6 +48,7 @@ __all__ = [
     "get_color_transfer",
     "get_frame_dimensions",
     "get_nb_frames",
+    "get_r_frame_rate",
     "get_video_range_info",
     "probe",
     # _rawvideo

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from aind_video_utils import transcode as transcode_mod
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
     OFFLINE_10BIT,
@@ -19,7 +21,8 @@ from aind_video_utils.encoding import (
     EncodingProfile,
     with_setparams,
 )
-from aind_video_utils.transcode import VIDEO_EXTENSIONS
+from aind_video_utils.probe import get_r_frame_rate
+from aind_video_utils.transcode import VIDEO_EXTENSIONS, transcode_video
 
 ffmpeg_required = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -546,6 +549,170 @@ def test_offline_8bit_preserves_full_range_yuv420p_shadows_and_highlights(tmp_pa
     # And the values should be in the right direction: low-source-Y → low-output-Y,
     # high-source-Y → high-output-Y. (Sanity check that no inversion crept in.)
     assert out_y[0] < out_y[1] < out_y[2] < out_y[3]
+
+
+# ---------------------------------------------------------------------------
+# get_r_frame_rate
+# ---------------------------------------------------------------------------
+
+
+def test_get_r_frame_rate_parses_integer_rate():
+    assert get_r_frame_rate({"streams": [{"r_frame_rate": "500/1"}]}) == (500, 1)
+
+
+def test_get_r_frame_rate_parses_ntsc_rate():
+    assert get_r_frame_rate({"streams": [{"r_frame_rate": "30000/1001"}]}) == (30000, 1001)
+
+
+@pytest.mark.parametrize("rate", [None, "N/A", "0/0", "0/1", "500", "abc/1"])
+def test_get_r_frame_rate_returns_none_on_bad_input(rate):
+    stream: dict = {} if rate is None else {"r_frame_rate": rate}
+    assert get_r_frame_rate({"streams": [stream]}) is None
+
+
+# ---------------------------------------------------------------------------
+# transcode_video: CFR normalization + frame-drop guard
+#
+# These are deterministic unit tests over the command construction and the
+# progress-counter check; they fake the ffmpeg subprocess so they need neither
+# ffmpeg nor a (hard-to-synthesize) drop-prone source. A drop-prone h264-in-AVI
+# fixture isn't portable to CI, so the frame loss is covered here by injecting a
+# drop_frames line into the faked progress stream.
+# ---------------------------------------------------------------------------
+
+
+class _FakePopen:
+    """Stand-in for subprocess.Popen that replays a fixed progress stream."""
+
+    def __init__(self, cmd, *, stdout_bytes: bytes, returncode: int, capture: list):
+        self.args = cmd
+        capture.append(cmd)
+        self.stdout = io.BytesIO(stdout_bytes)
+        self.stderr = io.BytesIO(b"")
+        self._returncode = returncode
+
+    def wait(self):
+        return self._returncode
+
+
+def _patch_ffmpeg(monkeypatch, *, stdout_bytes: bytes, returncode: int = 0, rate: str | None = "500/1"):
+    """Fake out probe() and subprocess.Popen; return the list capturing argv."""
+    captured: list = []
+
+    def fake_probe(_path):
+        return {"streams": [{"pix_fmt": "gbrp", "color_space": "gbr", "color_range": "pc", "r_frame_rate": rate}]}
+
+    def fake_popen(cmd, stdout=None, stderr=None):
+        return _FakePopen(cmd, stdout_bytes=stdout_bytes, returncode=returncode, capture=captured)
+
+    monkeypatch.setattr(transcode_mod, "probe", fake_probe)
+    monkeypatch.setattr(transcode_mod.subprocess, "Popen", fake_popen)
+    return captured
+
+
+def _vf_value(cmd: list) -> str:
+    return cmd[cmd.index("-vf") + 1]
+
+
+_CLEAN_PROGRESS = b"frame=100\ndrop_frames=0\ndup_frames=0\nprogress=end\n"
+_DROP_PROGRESS = b"frame=94\ndrop_frames=6\ndup_frames=0\nprogress=end\n"
+
+
+def test_normalize_cfr_prepends_setpts(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
+    assert _vf_value(captured[0]).startswith("setpts=N/(500/1)/TB,")
+
+
+def test_normalize_cfr_uses_exact_rational_rate(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="30000/1001")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
+    assert _vf_value(captured[0]).startswith("setpts=N/(30000/1001)/TB,")
+
+
+def test_normalize_cfr_off_omits_setpts(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=False)
+    assert "setpts" not in _vf_value(captured[0])
+
+
+def test_normalize_cfr_raises_without_readable_rate(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate=None)
+    with pytest.raises(RuntimeError, match="no readable r_frame_rate"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
+
+
+def test_fail_on_frame_drop_raises_on_dropped_frames(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_DROP_PROGRESS)
+    with pytest.raises(RuntimeError, match="drop_frames=6"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", fail_on_frame_drop=True)
+
+
+def test_fail_on_frame_drop_off_allows_dropped_frames(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_DROP_PROGRESS)
+    out = transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", fail_on_frame_drop=False)
+    assert out == tmp_path / "out.mp4"
+
+
+def test_frame_exact_output_does_not_raise(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    out = transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", fail_on_frame_drop=True)
+    assert out == tmp_path / "out.mp4"
+
+
+@ffmpeg_required
+def test_transcode_video_preserves_frame_count_and_zero_start(tmp_path: Path) -> None:
+    """End-to-end happy path: a clean CFR source transcodes with defaults
+    (normalize_cfr + fail_on_frame_drop on) without dropping frames, lands at
+    PTS 0, and keeps every source frame."""
+    src = tmp_path / "src.mp4"
+    dst = tmp_path / "dst.mp4"
+    _encode_untagged_yuv420p(src, [20, 40, 60, 80, 100, 120])
+
+    profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    transcode_video(src, dst, profile=profile)  # defaults: normalize_cfr=True, fail_on_frame_drop=True
+
+    def _count(path: Path) -> int:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "default=nk=1:nw=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return int(out.stdout.strip())
+
+    start = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=start_time",
+            "-of",
+            "default=nk=1:nw=1",
+            str(dst),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert _count(dst) == _count(src) == 6
+    assert float(start) == 0.0
 
 
 # ---------------------------------------------------------------------------

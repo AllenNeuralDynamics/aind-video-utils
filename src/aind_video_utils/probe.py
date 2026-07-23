@@ -213,6 +213,39 @@ def get_duration_seconds(probe_json: ProbeDict) -> float | None:
     return None
 
 
+def get_r_frame_rate(probe_json: ProbeDict) -> tuple[int, int] | None:
+    """Return the base frame rate ``(num, den)`` of the first video stream.
+
+    Parses ffprobe's ``r_frame_rate`` field (the stream's real base frame rate,
+    a rational like ``"500/1"`` or ``"30000/1001"``) into its numerator and
+    denominator.  Returned as an exact fraction so callers can build a
+    precision-preserving ``setpts=N/(num/den)/TB`` expression for CFR rates that
+    aren't integers.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        ``(numerator, denominator)``, or ``None`` when the field is absent,
+        unparseable, or degenerate (``"0/0"``).
+    """
+    rate = probe_json["streams"][0].get("r_frame_rate")
+    if not rate or rate == "N/A":
+        return None
+    try:
+        num_str, den_str = rate.split("/")
+        num, den = int(num_str), int(den_str)
+    except ValueError:
+        return None
+    if num <= 0 or den <= 0:
+        return None
+    return num, den
+
+
 def get_nb_frames(probe_json: ProbeDict) -> int | None:
     """Return the frame count from the first video stream.
 
