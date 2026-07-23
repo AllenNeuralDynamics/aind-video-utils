@@ -14,7 +14,7 @@ from aind_video_utils.encoding import (
     RangeOverride,
     with_setparams,
 )
-from aind_video_utils.frames import extract_luma_frame, extract_srgb_frame
+from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
 from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, read_mp4_frame_index
 from aind_video_utils.probe import (
     get_color_transfer,
@@ -43,6 +43,7 @@ __all__ = [
     "SPEC_VERSION",
     "with_setparams",
     # frames
+    "extract_frame_by_index",
     "extract_luma_frame",
     "extract_srgb_frame",
     # mp4_index

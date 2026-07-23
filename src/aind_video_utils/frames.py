@@ -19,6 +19,7 @@ from aind_video_utils._rawvideo import (
     luma_from_yuv420p_buff_eltype,
     rgb_from_rawvideo_rgb24_buff,
 )
+from aind_video_utils.mp4_index import Mp4FrameIndex, read_mp4_frame_index
 from aind_video_utils.probe import (
     ProbeDict,
     get_color_transfer,
@@ -162,6 +163,87 @@ def extract_srgb_frame(
     result = sp.run(cmd_parts, stdout=sp.PIPE, stderr=sp.DEVNULL, text=False, check=True)
     img_arr = rgb_from_rawvideo_rgb24_buff(result.stdout, w, h)
     return img_arr
+
+
+def extract_frame_by_index(
+    video_path: str | Path,
+    display_index: int,
+    *,
+    index: Mp4FrameIndex | None = None,
+    probe_json: ProbeDict | None = None,
+) -> npt.NDArray[np.uint8]:
+    """Extract the frame at presentation-order *display_index* from an MP4, frame-exact.
+
+    Addresses frames by *number* rather than by time.  Reads the MP4 ``moov``
+    sample tables (see :func:`~aind_video_utils.read_mp4_frame_index`) to find
+    the keyframe beginning *display_index*'s GOP, seeks there with input-side
+    ``-ss``, and decodes forward to the target — the recipe verified to be
+    frame-exact, including the edit-list ``media_time`` compensation that a
+    naive time seek gets wrong.
+
+    Requires a local, seekable, non-fragmented MP4 whose edit list is
+    frame-addressing-safe.  Returns a fast preview decode using ffmpeg's default
+    color conversion; for color-managed sRGB output use
+    :func:`extract_srgb_frame` at the seconds returned by the index's
+    ``seek_plan``.
+
+    Parameters
+    ----------
+    video_path : str | Path
+        Path to a local MP4/MOV file.
+    display_index : int
+        0-based frame index in presentation order.
+    index : Mp4FrameIndex, optional
+        Pre-parsed frame index.  Pass it when extracting several frames from the
+        same file to avoid re-reading the ``moov`` each call.
+    probe_json : ProbeDict, optional
+        Pre-computed ffprobe output (used only for frame dimensions).
+
+    Returns
+    -------
+    NDArray[np.uint8]
+        RGB image with shape ``(h, w, 3)``.
+
+    Raises
+    ------
+    ValueError
+        If *display_index* is out of range or the file's edit list is not
+        frame-addressing-safe.
+    """
+    if index is None:
+        index = read_mp4_frame_index(video_path)
+    seek_seconds, frames_after_keyframe = index.seek_plan(display_index)
+    if probe_json is None:
+        probe_json = probe(video_path)
+    w, h = get_frame_dimensions(probe_json)
+    cmd_parts = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        # 9 decimals rounds to the exact media tick, so -ss lands on the target
+        # keyframe rather than its predecessor.
+        "-ss",
+        f"{seek_seconds:.9f}",
+        *http_input_flags(video_path),
+        "-i",
+        str(video_path),
+        "-vf",
+        f"select=eq(n\\,{frames_after_keyframe}),format=rgb24",
+        "-frames:v",
+        "1",
+        # passthrough so the implicit CFR vsync stage can't drop the selected
+        # frame based on its post-seek timestamp.
+        "-vsync",
+        "0",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    result = sp.run(cmd_parts, stdout=sp.PIPE, stderr=sp.DEVNULL, text=False, check=True)
+    return rgb_from_rawvideo_rgb24_buff(result.stdout, w, h)
 
 
 def extract_luma_frame(

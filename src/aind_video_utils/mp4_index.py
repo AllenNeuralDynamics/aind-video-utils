@@ -142,6 +142,52 @@ class Mp4FrameIndex:
             raise ValueError(f"no keyframe at or before decode_index {decode_index}")
         return int(keyframes[pos])
 
+    def seek_plan(self, display_index: int) -> tuple[float, int]:
+        """Return an ``(seek_seconds, frames_after_keyframe)`` plan for frame *display_index*.
+
+        Encodes the verified frame-exact extraction recipe: seek an MP4 decoder
+        to ``seek_seconds`` with input-side ``-ss`` (which addresses the
+        *presentation* timeline), then decode ``frames_after_keyframe`` frames
+        forward — counting the landed keyframe as 0 — to reach *display_index*.
+
+        The seek targets the keyframe beginning *display_index*'s GOP.  Its
+        presentation time is the keyframe's media PTS minus the edit list's
+        ``media_time`` (a single trivial ``elst`` maps that media time to
+        presentation 0); without the subtraction the seek lands ``media_time``
+        ticks late.
+
+        Parameters
+        ----------
+        display_index : int
+            0-based frame index in presentation order.
+
+        Returns
+        -------
+        seek_seconds : float
+            Presentation-timeline time to pass to input-side ``-ss``.  Format
+            with enough decimals that it rounds to the exact media tick (``-ss``
+            lands on the nearest keyframe at or before the request).
+        frames_after_keyframe : int
+            Number of frames to decode past the keyframe to reach the target.
+
+        Raises
+        ------
+        ValueError
+            If *display_index* is out of range, or the edit list is not
+            frame-addressing-safe (see :meth:`is_frame_addressing_safe`).
+        """
+        if not 0 <= display_index < self.n_samples:
+            raise ValueError(f"display_index {display_index} out of range [0, {self.n_samples})")
+        if not self.is_frame_addressing_safe():
+            raise ValueError("edit list is not frame-addressing-safe; cannot derive a simple seek time")
+        order = self.display_order
+        decode_index = int(order[display_index])
+        keyframe = self.keyframe_at_or_before(decode_index)
+        keyframe_display_rank = int(np.flatnonzero(order == keyframe)[0])
+        media_time = self.edits[0].media_time if self.edits else 0
+        seek_seconds = (int(self.pts[keyframe]) - media_time) / self.media_timescale
+        return seek_seconds, display_index - keyframe_display_rank
+
     def is_frame_addressing_safe(self) -> bool:
         """Whether the edit list is safe to ignore for frame-index addressing.
 

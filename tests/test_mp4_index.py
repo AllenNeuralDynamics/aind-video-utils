@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aind_video_utils import EditListEntry, Mp4FrameIndex, read_mp4_frame_index
+from aind_video_utils import EditListEntry, Mp4FrameIndex, extract_frame_by_index, read_mp4_frame_index
 from aind_video_utils.mp4_index import (
     _chunk_offsets,
     _composition_offsets,
@@ -347,6 +347,63 @@ def test_tail_trim_is_unsafe():
 
 
 # ---------------------------------------------------------------------------
+# seek_plan (the verified frame-exact extraction recipe, computed on the index)
+# ---------------------------------------------------------------------------
+#
+# A reordered 2-GOP timeline: keyframes at decode 0 and 3, B-frame reordering
+# within each GOP, and (optionally) a trivial reorder-compensation edit
+# (media_time == 64 == min pts). display_order works out to [0, 2, 1, 3, 5, 4].
+def _reordered_index(edits: tuple[EditListEntry, ...] = ()) -> Mp4FrameIndex:
+    return _index(
+        pts=[64, 128, 96, 160, 224, 192],
+        dts=[0, 32, 64, 96, 128, 160],
+        is_keyframe=[True, False, False, True, False, False],
+        media_timescale=16000,
+        media_duration=224,
+        edits=edits,
+    )
+
+
+def test_seek_plan_display_order_is_reordered():
+    assert _reordered_index().display_order.tolist() == [0, 2, 1, 3, 5, 4]
+
+
+def test_seek_plan_subtracts_media_time_and_counts_from_keyframe():
+    idx = _reordered_index(edits=(EditListEntry(1000, 64, 1.0),))
+    # display 5 -> decode 4, covering keyframe decode 3 (display rank 3).
+    # seek = (pts[3] - media_time)/ts = (160-64)/16000 = 0.006 ; count = 5-3 = 2
+    seek, count = idx.seek_plan(5)
+    assert seek == pytest.approx(0.006)
+    assert count == 2
+
+
+def test_seek_plan_first_frame_seeks_to_zero():
+    idx = _reordered_index(edits=(EditListEntry(1000, 64, 1.0),))
+    seek, count = idx.seek_plan(0)
+    assert seek == pytest.approx(0.0)
+    assert count == 0
+
+
+def test_seek_plan_without_edit_list_uses_raw_pts():
+    idx = _reordered_index()  # no edits
+    # display 5 -> decode 4, keyframe decode 3, no media_time subtraction.
+    seek, count = idx.seek_plan(5)
+    assert seek == pytest.approx(160 / 16000)
+    assert count == 2
+
+
+def test_seek_plan_out_of_range_raises():
+    with pytest.raises(ValueError, match="out of range"):
+        _reordered_index().seek_plan(6)
+
+
+def test_seek_plan_unsafe_edit_list_raises():
+    idx = _reordered_index(edits=(EditListEntry(1000, 500, 1.0),))  # front trim
+    with pytest.raises(ValueError, match="frame-addressing-safe"):
+        idx.seek_plan(2)
+
+
+# ---------------------------------------------------------------------------
 # End-to-end against a real (small) B-frame MP4 built with ffmpeg
 # ---------------------------------------------------------------------------
 
@@ -443,6 +500,60 @@ def test_read_mp4_frame_index_has_composition_offsets_with_bframes(tmp_path: Pat
     idx = read_mp4_frame_index(src)
     # With B-frames, some frames carry a nonzero composition offset (pts != dts).
     assert bool(np.any(idx.pts != idx.dts))
+
+
+def _decode_frame_from_zero(path: Path, n: int, w: int = 64, h: int = 64) -> np.ndarray:
+    """Ground truth: decode from frame 0 and emit display-order frame *n*."""
+    out = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"select=eq(n\\,{n}),format=rgb24",
+            "-frames:v",
+            "1",
+            "-vsync",
+            "0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    return np.frombuffer(out, dtype=np.uint8).reshape(h, w, 3)
+
+
+@ffmpeg_required
+@pytest.mark.parametrize("n", [0, 1, 37, 59])
+def test_extract_frame_by_index_matches_decode_from_zero(tmp_path: Path, n: int) -> None:
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    got = extract_frame_by_index(src, n)
+    assert got.shape == (64, 64, 3)
+    assert np.array_equal(got, _decode_frame_from_zero(src, n))
+
+
+@ffmpeg_required
+def test_extract_frame_by_index_accepts_prebuilt_index(tmp_path: Path) -> None:
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    idx = read_mp4_frame_index(src)
+    got = extract_frame_by_index(src, 20, index=idx)
+    assert np.array_equal(got, _decode_frame_from_zero(src, 20))
+
+
+@ffmpeg_required
+def test_extract_frame_by_index_out_of_range_raises(tmp_path: Path) -> None:
+    src = tmp_path / "bframes.mp4"
+    _make_bframe_mp4(src)
+    with pytest.raises(ValueError, match="out of range"):
+        extract_frame_by_index(src, 10_000)
 
 
 def test_read_mp4_frame_index_non_mp4_raises(tmp_path: Path) -> None:
