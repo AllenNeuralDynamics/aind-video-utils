@@ -10,7 +10,14 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-from aind_video_utils.encoding import OFFLINE_8BIT, EncodingProfile, RangeOverride, with_setparams
+from aind_video_utils.encoding import (
+    OFFLINE_8BIT,
+    EncodingProfile,
+    RangeOverride,
+    with_poster,
+    with_preview,
+    with_setparams,
+)
 from aind_video_utils.probe import get_r_frame_rate, probe
 from aind_video_utils.utils import http_input_flags
 
@@ -34,15 +41,19 @@ def _effective_profile(
     auto_fix_colorspace: bool,
     range_override: RangeOverride | None,
     normalize_cfr: bool,
+    preview_fps: float | None,
+    poster_at_seconds: float | None,
 ) -> EncodingProfile:
-    """Apply the probe-driven filter adjustments to *profile*.
+    """Apply the probe-driven adjustments to *profile*.
 
     Prepends the per-source ``setparams`` colour clause (when
     ``auto_fix_colorspace``) and the CFR-normalizing ``setpts`` clause (when
-    ``normalize_cfr``).  Probes the source at most once.
+    ``normalize_cfr``), then appends the preview and poster derivatives (when
+    ``preview_fps`` / ``poster_at_seconds``).  Probes the source at most once.
     """
     effective = profile
-    probe_json = probe(input_path) if (auto_fix_colorspace or normalize_cfr) else None
+    needs_probe = auto_fix_colorspace or normalize_cfr or preview_fps is not None or poster_at_seconds is not None
+    probe_json = probe(input_path) if needs_probe else None
     if auto_fix_colorspace:
         assert probe_json is not None
         effective = with_setparams(profile, probe_json, range_override=range_override)
@@ -56,7 +67,13 @@ def _effective_profile(
             )
         num, den = rate
         setpts = f"setpts=N/({num}/{den})/TB"
-        effective = effective.replace(video_filters=f"{setpts},{effective.video_filters}")
+        effective = effective.prepend_conditioning(setpts)
+    if preview_fps is not None:
+        assert probe_json is not None
+        effective = with_preview(effective, probe_json, target_fps=preview_fps)
+    if poster_at_seconds is not None:
+        assert probe_json is not None
+        effective = with_poster(effective, probe_json, at_seconds=poster_at_seconds)
     return effective
 
 
@@ -112,6 +129,8 @@ def transcode_video(
     range_override: RangeOverride | None = None,
     normalize_cfr: bool = True,
     fail_on_frame_drop: bool = True,
+    preview_fps: float | None = None,
+    poster_at_seconds: float | None = None,
     no_audio: bool = True,
     on_progress: Callable[[int], None] | None = None,
 ) -> Path:
@@ -137,8 +156,8 @@ def transcode_video(
         sources that are TV-range encoded.  Ignored when
         ``auto_fix_colorspace=False``.
     normalize_cfr : bool
-        When ``True`` (the default), probe the source frame rate and prepend a
-        ``setpts=N/(num/den)/TB`` filter that re-stamps every frame's
+        When ``True`` (the default), probe the source frame rate and add to the
+        profile's conditioning a ``setpts=N/(num/den)/TB`` filter that re-stamps every frame's
         presentation timestamp from its display-order index at the source's
         base frame rate.  This yields a clean constant-frame-rate timeline
         starting at PTS 0 and — critically — prevents ffmpeg's implicit vsync
@@ -157,16 +176,35 @@ def transcode_video(
         copy of the decoded source.  This turns ffmpeg's silent
         ``*** dropping frame`` warning into a hard error.  Set to ``False`` when
         legitimately resampling variable-frame-rate input to CFR (where
-        duplicated frames are expected).
+        duplicated frames are expected).  ffmpeg reports these counters for the
+        whole process rather than per output, so every derivative must keep
+        ``fps_mode="passthrough"`` for the guard to stay attributable.
+    preview_fps : float | None
+        When set, emit a frame-decimated preview beside *output_path*
+        (``clip.mp4`` also writes ``clip_preview.mp4``) as a second output of
+        the same ffmpeg process, sharing the decode and the colour chain.  The
+        value is a target rather than an exact rate: the decimation factor is
+        ``round(source_fps / preview_fps)``, so every preview frame is a real
+        source frame.  See :func:`aind_video_utils.encoding.with_preview`.
+    poster_at_seconds : float | None
+        When set, also write a JPEG still this far into the video
+        (``clip.mp4`` also writes ``clip_poster.jpg``), branched off the
+        conditioned source and encoded as sRGB so it matches what a browser
+        shows for the video beside it.  See
+        :func:`aind_video_utils.encoding.with_poster`.
     no_audio : bool
         If ``True``, strip audio (``-an``).
     on_progress : Callable[[int], None] | None
-        Called with the current frame number as ffmpeg reports progress.
+        Called with the current frame number as ffmpeg reports progress.  With
+        a preview attached the progress stream covers both encoders, so treat
+        the count as approximate.
 
     Returns
     -------
     Path
-        *output_path* on success.
+        *output_path* on success.  Derivative outputs are written but not
+        returned; ask ``profile.output_paths(output_path)`` for every path a
+        profile writes.
 
     Raises
     ------
@@ -176,6 +214,9 @@ def transcode_video(
         If ``fail_on_frame_drop`` is set and ffmpeg dropped or duplicated
         frames, or if ``normalize_cfr`` is set but the source has no readable
         base frame rate.
+    ValueError
+        If ``fail_on_frame_drop`` is set alongside a derivative whose
+        ``fps_mode`` is not ``"passthrough"``.
     """
     effective = _effective_profile(
         profile,
@@ -183,26 +224,33 @@ def transcode_video(
         auto_fix_colorspace=auto_fix_colorspace,
         range_override=range_override,
         normalize_cfr=normalize_cfr,
+        preview_fps=preview_fps,
+        poster_at_seconds=poster_at_seconds,
     )
 
-    cmd: list[str] = ["ffmpeg"]
+    # drop_frames/dup_frames arrive on one process-wide progress stream and
+    # cannot be attributed to an output. passthrough is the only fps_mode that
+    # can never duplicate, so with every derivative pinned to it a nonzero
+    # count still indicts the primary encode.
+    unpinned = [d.suffix for d in effective.derivatives if d.fps_mode != "passthrough"]
+    if fail_on_frame_drop and unpinned:
+        raise ValueError(
+            f"derivative(s) {unpinned} set fps_mode != 'passthrough', which can duplicate frames and "
+            "trip fail_on_frame_drop on a healthy primary output, because ffmpeg reports drop/dup "
+            "counts for the whole process rather than per output. Use fps_mode='passthrough' or pass "
+            "fail_on_frame_drop=False."
+        )
+
+    cmd: list[str] = ["ffmpeg", "-progress", "pipe:1", "-nostats", "-y"]
     cmd.extend(http_input_flags(input_path))
     cmd.extend(effective.ffmpeg_input_args())
     cmd.extend(["-i", str(input_path)])
-    cmd.extend(effective.ffmpeg_output_args())
-
-    if no_audio:
-        cmd.append("-an")
-
-    cmd.extend(
-        [
-            "-progress",
-            "pipe:1",
-            "-nostats",
-            "-y",
-            str(output_path),
-        ]
-    )
+    cmd.extend(effective.ffmpeg_graph_args())
+    for group, path in zip(effective.ffmpeg_output_groups(), effective.output_paths(output_path), strict=True):
+        cmd.extend(group)
+        if no_audio:
+            cmd.append("-an")
+        cmd.append(str(path))
 
     drop_frames, dup_frames = _run_ffmpeg(cmd, on_progress=on_progress)
 

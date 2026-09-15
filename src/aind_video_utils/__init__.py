@@ -10,8 +10,12 @@ from aind_video_utils.encoding import (
     ONLINE_8BIT,
     ONLINE_10BIT,
     SPEC_VERSION,
+    Derivative,
     EncodingProfile,
     RangeOverride,
+    preview_decimation,
+    with_poster,
+    with_preview,
     with_setparams,
 )
 from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
@@ -34,6 +38,7 @@ except PackageNotFoundError:
 __all__ = [
     "__version__",
     # encoding profiles
+    "Derivative",
     "EncodingProfile",
     "OFFLINE_8BIT",
     "OFFLINE_10BIT",
@@ -41,6 +46,9 @@ __all__ = [
     "ONLINE_10BIT",
     "RangeOverride",
     "SPEC_VERSION",
+    "preview_decimation",
+    "with_poster",
+    "with_preview",
     "with_setparams",
     # frames
     "extract_frame_by_index",

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import io
+import json
+import re
 import shutil
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +21,11 @@ from aind_video_utils.encoding import (
     ONLINE_10BIT,
     PROFILES,
     SPEC_VERSION,
+    Derivative,
     EncodingProfile,
+    preview_decimation,
+    with_poster,
+    with_preview,
     with_setparams,
 )
 from aind_video_utils.probe import get_r_frame_rate
@@ -272,9 +279,9 @@ def test_with_setparams_no_probe_uses_aind_defaults():
     """Without probe_json, with_setparams fills every field with AIND defaults
     (colorspace=smpte170m, matching the bitstream truth for untagged YUV)."""
     modified = with_setparams(OFFLINE_8BIT)
-    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=pc,"
-    assert modified.video_filters.startswith(expected_prefix)
-    assert modified.video_filters == expected_prefix + OFFLINE_8BIT.video_filters
+    expected = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=pc"
+    assert modified.source_filters == expected
+    assert modified.video_filters == OFFLINE_8BIT.video_filters  # the encoding chain is untouched
 
 
 def test_with_setparams_probe_aware_fully_tagged_source_unchanged():
@@ -288,7 +295,7 @@ def test_with_setparams_probe_aware_fully_tagged_source_unchanged():
         color_range="tv",
     )
     modified = with_setparams(OFFLINE_8BIT, probe_json)
-    assert modified.video_filters == OFFLINE_8BIT.video_filters  # no setparams prepended
+    assert modified.source_filters == ""  # no conditioning needed
 
 
 def test_with_setparams_probe_aware_yuv420p_untagged_fills_smpte170m():
@@ -296,9 +303,9 @@ def test_with_setparams_probe_aware_yuv420p_untagged_fills_smpte170m():
     default for untagged YUV)."""
     probe_json = _probe_json(pix_fmt="yuv420p")
     modified = with_setparams(OFFLINE_8BIT, probe_json)
-    assert "colorspace=smpte170m" in modified.video_filters
-    assert "color_trc=linear" in modified.video_filters
-    assert "range=pc" in modified.video_filters
+    assert "colorspace=smpte170m" in modified.source_filters
+    assert "color_trc=linear" in modified.source_filters
+    assert "range=pc" in modified.source_filters
 
 
 def test_with_setparams_probe_aware_gbrp_untagged_fills_gbr():
@@ -306,7 +313,7 @@ def test_with_setparams_probe_aware_gbrp_untagged_fills_gbr():
     no YUV matrix yet applied)."""
     probe_json = _probe_json(pix_fmt="gbrp")
     modified = with_setparams(OFFLINE_8BIT, probe_json)
-    assert "colorspace=gbr" in modified.video_filters
+    assert "colorspace=gbr" in modified.source_filters
 
 
 def test_with_setparams_probe_aware_gbrp_with_tags_preserves_them():
@@ -319,11 +326,11 @@ def test_with_setparams_probe_aware_gbrp_with_tags_preserves_them():
         color_range="pc",
     )
     modified = with_setparams(OFFLINE_8BIT, probe_json)
-    assert "color_trc=linear" in modified.video_filters
-    assert "color_primaries=bt709" in modified.video_filters
+    assert "color_trc=linear" in modified.source_filters
+    assert "color_primaries=bt709" in modified.source_filters
     # Source-tagged fields must NOT be re-asserted (would be lying-or-redundant)
-    assert "colorspace=" not in modified.video_filters.split(",")[0]
-    assert "range=" not in modified.video_filters.split(",")[0]
+    assert "colorspace=" not in modified.source_filters
+    assert "range=" not in modified.source_filters
 
 
 def test_with_setparams_probe_aware_unknown_treated_as_missing():
@@ -337,25 +344,24 @@ def test_with_setparams_probe_aware_unknown_treated_as_missing():
         color_range="unknown",
     )
     modified = with_setparams(OFFLINE_8BIT, probe_json)
-    assert "color_primaries=bt709" in modified.video_filters
-    assert "color_trc=linear" in modified.video_filters
-    assert "colorspace=smpte170m" in modified.video_filters
-    assert "range=pc" in modified.video_filters
+    assert "color_primaries=bt709" in modified.source_filters
+    assert "color_trc=linear" in modified.source_filters
+    assert "colorspace=smpte170m" in modified.source_filters
+    assert "range=pc" in modified.source_filters
 
 
 def test_with_setparams_range_override_no_probe_uses_override():
     """Without probe_json, range_override='tv' replaces the default range=pc."""
     modified = with_setparams(OFFLINE_8BIT, range_override="tv")
-    expected_prefix = "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=tv,"
-    assert modified.video_filters.startswith(expected_prefix)
+    assert modified.source_filters == "setparams=color_primaries=bt709:color_trc=linear:colorspace=smpte170m:range=tv"
 
 
 def test_with_setparams_range_override_overrides_untagged_default():
     """For an untagged source, range_override='tv' wins over the range=pc default."""
     probe_json = _probe_json(pix_fmt="yuv420p")
     modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
-    assert "range=tv" in modified.video_filters
-    assert "range=pc" not in modified.video_filters
+    assert "range=tv" in modified.source_filters
+    assert "range=pc" not in modified.source_filters
 
 
 def test_with_setparams_range_override_overrides_source_tag():
@@ -370,7 +376,7 @@ def test_with_setparams_range_override_overrides_source_tag():
         color_range="pc",
     )
     modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
-    assert "range=tv" in modified.video_filters
+    assert "range=tv" in modified.source_filters
 
 
 def test_with_setparams_range_override_fully_tagged_source_still_adds_setparams():
@@ -384,19 +390,19 @@ def test_with_setparams_range_override_fully_tagged_source_still_adds_setparams(
         color_range="pc",
     )
     modified = with_setparams(OFFLINE_8BIT, probe_json, range_override="tv")
-    assert modified.video_filters.startswith("setparams=range=tv,")
+    assert modified.source_filters == "setparams=range=tv"
 
 
 def test_with_setparams_range_override_pc_explicit():
     """range_override='pc' is a valid explicit value (equivalent to current default)."""
     modified = with_setparams(OFFLINE_8BIT, range_override="pc")
-    assert "range=pc" in modified.video_filters
+    assert "range=pc" in modified.source_filters
 
 
 def test_with_setparams_does_not_mutate_original():
-    original_vf = OFFLINE_8BIT.video_filters
+    original = (OFFLINE_8BIT.source_filters, OFFLINE_8BIT.video_filters)
     with_setparams(OFFLINE_8BIT)
-    assert OFFLINE_8BIT.video_filters == original_vf
+    assert (OFFLINE_8BIT.source_filters, OFFLINE_8BIT.video_filters) == original
 
 
 def test_with_setparams_preserves_other_fields():
@@ -428,7 +434,7 @@ def test_profiles_has_four_entries():
 # ---------------------------------------------------------------------------
 
 
-def _encode_untagged_yuv420p(out_path: Path, luma_values: list[int]) -> None:
+def _encode_untagged_yuv420p(out_path: Path, luma_values: list[int], framerate: int = 10) -> None:
     """Write a yuv420p mpeg4 source with given Y values and NO color_range tag.
 
     Mimics the AIND Bonsai production format: full-range yuv420p without
@@ -457,7 +463,7 @@ def _encode_untagged_yuv420p(out_path: Path, luma_values: list[int]) -> None:
             "-video_size",
             f"{W}x{H}",
             "-framerate",
-            "10",
+            str(framerate),
             "-i",
             str(raw),
             "-c:v",
@@ -727,3 +733,630 @@ def test_video_extensions_is_frozenset():
 def test_video_extensions_contains_expected():
     expected = {".avi", ".flv", ".mkv", ".mov", ".mp4", ".webm", ".wmv"}
     assert VIDEO_EXTENSIONS == expected
+
+
+# ---------------------------------------------------------------------------
+# Derivatives: multi-output profiles
+# ---------------------------------------------------------------------------
+
+
+def _dummy_derivative(**kwargs) -> Derivative:
+    defaults = dict(suffix="_preview", codec="libx264", pixel_format="yuv420p", container="mp4")
+    return Derivative(**{**defaults, **kwargs})
+
+
+def test_plain_profile_still_emits_vf():
+    assert OFFLINE_8BIT.derivatives == ()
+    assert OFFLINE_8BIT.ffmpeg_graph_args() == ["-vf", OFFLINE_8BIT.video_filters]
+
+
+def test_plain_profile_output_groups_have_no_map():
+    groups = OFFLINE_8BIT.ffmpeg_output_groups()
+    assert len(groups) == 1
+    assert "-map" not in groups[0]
+
+
+def test_output_args_equals_graph_plus_single_group():
+    assert OFFLINE_8BIT.ffmpeg_output_args() == [
+        *OFFLINE_8BIT.ffmpeg_graph_args(),
+        *OFFLINE_8BIT.ffmpeg_output_groups()[0],
+    ]
+
+
+def test_output_args_raises_when_derivatives_present():
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    with pytest.raises(ValueError, match="1 derivative output"):
+        profile.ffmpeg_output_args()
+
+
+def test_graph_args_split_and_tail_chain():
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(filters="select=not(mod(n\\,20))"),))
+    flag, graph = profile.ffmpeg_graph_args()
+    assert flag == "-filter_complex"
+    assert graph == f"[0:v]{OFFLINE_8BIT.video_filters},split=2[main][d0];[d0]select=not(mod(n\\,20))[d0out]"
+
+
+def test_graph_args_derivative_without_filters_has_no_tail_segment():
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    _, graph = profile.ffmpeg_graph_args()
+    assert graph.endswith("split=2[main][d0]")
+    assert ";" not in graph
+
+
+def test_map_label_follows_presence_of_tail_chain():
+    tailed = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(filters="select=not(mod(n\\,2))"),))
+    bare = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    assert tailed.ffmpeg_output_groups()[1][:2] == ["-map", "[d0out]"]
+    assert bare.ffmpeg_output_groups()[1][:2] == ["-map", "[d0]"]
+    assert tailed.ffmpeg_output_groups()[0][:2] == ["-map", "[main]"]
+
+
+def test_multiple_derivatives_get_distinct_labels():
+    profile = OFFLINE_8BIT.replace(
+        derivatives=(
+            _dummy_derivative(suffix="_a", filters="select=not(mod(n\\,2))"),
+            _dummy_derivative(suffix="_b"),
+        )
+    )
+    _, graph = profile.ffmpeg_graph_args()
+    assert "split=3[main][d0][d1]" in graph
+    labels = [g[1] for g in profile.ffmpeg_output_groups()]
+    assert labels == ["[main]", "[d0out]", "[d1]"]
+
+
+def test_derivative_emits_fps_mode_before_codec():
+    group = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),)).ffmpeg_output_groups()[1]
+    assert group[2:6] == ["-fps_mode", "passthrough", "-c:v", "libx264"]
+
+
+def test_output_paths_name_derivatives_from_primary_stem():
+    profile = OFFLINE_8BIT.replace(
+        derivatives=(_dummy_derivative(suffix="_preview"), _dummy_derivative(suffix="_thumb", container="mkv"))
+    )
+    assert profile.output_paths(Path("/data/clip.mp4")) == [
+        Path("/data/clip.mp4"),
+        Path("/data/clip_preview.mp4"),
+        Path("/data/clip_thumb.mkv"),
+    ]
+
+
+def test_replace_preserves_derivatives():
+    """with_setparams and the CFR clause both go through replace(video_filters=...)."""
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    assert profile.replace(video_filters="null").derivatives == profile.derivatives
+
+
+def test_with_setparams_preserves_derivatives():
+    probe_json = {"streams": [{"pix_fmt": "yuv420p"}]}
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    assert with_setparams(profile, probe_json).derivatives == profile.derivatives
+
+
+# ---------------------------------------------------------------------------
+# Source conditioning vs the encoding chain
+# ---------------------------------------------------------------------------
+
+
+def test_vf_is_conditioning_then_chain():
+    """A single-output profile emits the two zones concatenated, which is what
+    it emitted before they were separate fields."""
+    profile = OFFLINE_8BIT.replace(source_filters="COND", video_filters="CHAIN")
+    assert profile.ffmpeg_graph_args() == ["-vf", "COND,CHAIN"]
+
+
+def test_vf_omits_the_separator_when_there_is_no_conditioning():
+    assert OFFLINE_8BIT.ffmpeg_graph_args() == ["-vf", OFFLINE_8BIT.video_filters]
+
+
+def test_prepend_conditioning_stacks_at_the_head():
+    profile = OFFLINE_8BIT.replace(source_filters="B").prepend_conditioning("A")
+    assert profile.source_filters == "A,B"
+
+
+def test_prepend_conditioning_onto_nothing_adds_no_separator():
+    assert OFFLINE_8BIT.prepend_conditioning("A").source_filters == "A"
+
+
+def test_conditioning_precedes_the_source_split():
+    """The point of the split field: a source tap reads the conditioned source,
+    not the raw decode."""
+    profile = OFFLINE_8BIT.replace(
+        source_filters="COND",
+        video_filters="CHAIN",
+        derivatives=(_dummy_derivative(filters="OWN", tap="source"),),
+    )
+    assert profile.ffmpeg_graph_args()[1] == "[0:v]COND,split=2[chain][d0];[chain]CHAIN[main];[d0]OWN[d0out]"
+
+
+def test_source_tap_inherits_range_override():
+    """A hand-written setparams in a derivative's own chain could not see
+    range_override, so the archive and the still would disagree on black level
+    for exactly the sources the override exists for."""
+    probe_json = _probe_json(pix_fmt="yuv420p")
+    profile = OFFLINE_8BIT.replace(video_filters="CHAIN", derivatives=(_dummy_derivative(filters="OWN", tap="source"),))
+    graph = with_setparams(profile, probe_json, range_override="tv").ffmpeg_graph_args()[1]
+    conditioning, _, branches = graph.partition("split=2")
+    assert "range=tv" in conditioning
+    assert "setparams" not in branches  # the derivative restates nothing
+
+
+def test_conditioning_reaches_both_taps():
+    profile = OFFLINE_8BIT.replace(
+        source_filters="COND",
+        video_filters="CHAIN",
+        derivatives=(
+            _dummy_derivative(suffix="_a", filters="TAIL"),
+            _dummy_derivative(suffix="_b", filters="OWN", tap="source"),
+        ),
+    )
+    assert profile.ffmpeg_graph_args()[1] == (
+        "[0:v]COND,split=2[chain][d1];[chain]CHAIN,split=2[main][d0];[d0]TAIL[d0out];[d1]OWN[d1out]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Derivative tap point
+# ---------------------------------------------------------------------------
+
+
+def test_tap_defaults_to_shared():
+    assert _dummy_derivative().tap == "shared"
+
+
+def test_source_tap_splits_ahead_of_the_shared_chain():
+    profile = OFFLINE_8BIT.replace(
+        video_filters="SHARED", derivatives=(_dummy_derivative(filters="OWN", tap="source"),)
+    )
+    assert profile.ffmpeg_graph_args()[1] == "[0:v]split=2[chain][d0];[chain]SHARED[main];[d0]OWN[d0out]"
+
+
+def test_source_tap_alone_needs_no_second_split():
+    """With nothing tapping the shared chain, its output goes straight to [main]."""
+    profile = OFFLINE_8BIT.replace(
+        video_filters="SHARED", derivatives=(_dummy_derivative(filters="OWN", tap="source"),)
+    )
+    assert ",split=" not in profile.ffmpeg_graph_args()[1]
+
+
+def test_mixed_taps_split_at_both_points():
+    profile = OFFLINE_8BIT.replace(
+        video_filters="SHARED",
+        derivatives=(
+            _dummy_derivative(suffix="_a", filters="TAIL"),
+            _dummy_derivative(suffix="_b", filters="OWN", tap="source"),
+        ),
+    )
+    assert profile.ffmpeg_graph_args()[1] == (
+        "[0:v]split=2[chain][d1];[chain]SHARED,split=2[main][d0];[d0]TAIL[d0out];[d1]OWN[d1out]"
+    )
+    assert [g[1] for g in profile.ffmpeg_output_groups()] == ["[main]", "[d0out]", "[d1out]"]
+
+
+def test_several_source_taps_share_one_split():
+    profile = OFFLINE_8BIT.replace(
+        video_filters="SHARED",
+        derivatives=(
+            _dummy_derivative(suffix="_a", filters="A", tap="source"),
+            _dummy_derivative(suffix="_b", filters="B", tap="source"),
+        ),
+    )
+    assert profile.ffmpeg_graph_args()[1].startswith("[0:v]split=3[chain][d0][d1];")
+
+
+def test_shared_tap_graph_is_unchanged_by_tap_support():
+    """Adding source taps must not perturb the graph a shared-only profile emits."""
+    profile = OFFLINE_8BIT.replace(video_filters="SHARED", derivatives=(_dummy_derivative(filters="TAIL"),))
+    assert profile.ffmpeg_graph_args()[1] == "[0:v]SHARED,split=2[main][d0];[d0]TAIL[d0out]"
+
+
+@ffmpeg_required
+def test_archive_preview_and_poster_from_one_invocation(tmp_path: Path) -> None:
+    """One transcode writes archive, preview and an sRGB still accurate to a code.
+
+    Converting the archive's BT.709 output to sRGB after the fact measures worse
+    than not converting at all, because zimg treats BT.709 as BT.1886.  Tapping
+    the conditioned source and encoding sRGB from linear light is what makes the
+    still match the video a viewer sees beside it -- and the still needs no
+    setparams of its own, because the conditioning runs ahead of its tap.
+    """
+
+    def srgb(linear: float) -> float:
+        return 12.92 * linear if linear <= 0.0031308 else 1.055 * linear ** (1 / 2.4) - 0.055
+
+    width = height = 64
+    bands = 16
+    levels = [16 * i for i in range(bands)]
+    plane = np.repeat(np.array(levels, dtype=np.uint8), height // bands)[:, None].repeat(width, 1)
+
+    raw = tmp_path / "src.yuv"
+    with raw.open("wb") as handle:
+        for _ in range(100):
+            handle.write(plane.tobytes())
+            handle.write(np.full((height // 2, width // 2), 128, dtype=np.uint8).tobytes() * 2)
+    src = tmp_path / "src.avi"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "yuv420p",
+            "-video_size",
+            f"{width}x{height}",
+            "-framerate",
+            "500",
+            "-i",
+            str(raw),
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "1",
+            "-pix_fmt",
+            "yuv420p",
+            str(src),
+        ],
+        check=True,
+    )
+
+    profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    dst = tmp_path / "v.mp4"
+    # One invocation, three outputs: archive, decimated preview, sRGB still.
+    assert transcode_video(src, dst, profile=profile, preview_fps=30.0, poster_at_seconds=0.1) == dst
+    assert (tmp_path / "v_preview.mp4").exists()
+
+    jpg = dst.with_name("v_poster.jpg")
+    assert jpg.exists()
+    gray = tmp_path / "poster.gray"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(jpg),
+            "-vf",
+            "extractplanes=y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            str(gray),
+        ],
+        check=True,
+    )
+    decoded = np.fromfile(gray, dtype=np.uint8)[: width * height].reshape(height, width)
+    for i, level in enumerate(levels):
+        expected = round(255 * srgb(level / 255))
+        got = int(decoded[i * (height // bands) + 1, width // 2])
+        assert abs(got - expected) <= 2, f"band {i}: sRGB {expected}, poster {got}"
+
+
+# ---------------------------------------------------------------------------
+# with_preview
+# ---------------------------------------------------------------------------
+
+
+def _preview_of(rate: str, **kwargs) -> Derivative:
+    return with_preview(OFFLINE_8BIT, {"streams": [{"r_frame_rate": rate}]}, **kwargs).derivatives[0]
+
+
+def _decimation(rate: str, **kwargs) -> tuple[int, Fraction]:
+    return preview_decimation({"streams": [{"r_frame_rate": rate}]}, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("rate", "factor", "preview_fps"),
+    [
+        ("500/1", 20, 25),  # the AIND behavior rate; 20 is its only in-band whole divisor
+        ("240/1", 8, 30),  # lands exactly on the target
+        ("120/1", 4, 30),
+        ("60/1", 2, 30),
+        ("300/1", 10, 30),  # 30 and 25 are both whole; the target breaks the tie
+        ("600/1", 20, 30),
+        ("1000/1", 40, 25),
+    ],
+)
+def test_decimation_prefers_a_whole_preview_rate(rate, factor, preview_fps):
+    assert _decimation(rate) == (factor, Fraction(preview_fps))
+
+
+@pytest.mark.parametrize("rate", ["500/1", "499/1", "997/1", "240/1", "1000/1", "120/1"])
+def test_decimation_stays_inside_the_band(rate):
+    """The band is a hard constraint, and it is what makes the whole-rate
+    preference safe: unbounded, 499 fps would decimate to 1 fps."""
+    _, preview_fps = _decimation(rate)
+    assert 25 <= preview_fps <= 35
+
+
+def test_decimation_ranks_by_target_when_no_whole_rate_is_available():
+    factor, preview_fps = _decimation("499/1")
+    assert factor == 17
+    assert preview_fps.denominator != 1
+
+
+@pytest.mark.parametrize("rate", ["25/1", "30000/1001", "10/1"])
+def test_decimation_keeps_every_frame_at_or_below_the_band(rate):
+    """Dropping frames cannot speed a video up, so slow sources get factor 1."""
+    assert _decimation(rate)[0] == 1
+
+
+def test_decimation_respects_a_custom_band():
+    """Excluding 25 forces 500 fps off its whole-rate factor onto 500/17."""
+    assert _decimation("500/1", target_fps=30.0, fps_band=(28.0, 35.0))[0] == 17
+
+
+def test_decimation_falls_back_out_of_band_rather_than_refusing():
+    factor, preview_fps = _decimation("500/1", target_fps=30.0, fps_band=(29.9, 30.1))
+    assert factor == 17
+    assert not 29.9 <= preview_fps <= 30.1
+
+
+def test_decimation_rejects_target_outside_band():
+    with pytest.raises(ValueError, match="falls outside"):
+        _decimation("500/1", target_fps=60.0)
+
+
+def test_decimation_rejects_unordered_band():
+    with pytest.raises(ValueError, match="positive"):
+        _decimation("500/1", target_fps=30.0, fps_band=(35.0, 25.0))
+
+
+def test_decimation_raises_without_readable_rate():
+    with pytest.raises(RuntimeError, match="r_frame_rate"):
+        preview_decimation({"streams": [{}]})
+
+
+def test_with_preview_filters_match_the_selected_factor():
+    factor, _ = _decimation("500/1")
+    assert _preview_of("500/1").filters == f"select=not(mod(n\\,{factor}))"
+
+
+@pytest.mark.parametrize("rate", ["25/1", "30000/1001", "10/1"])
+def test_with_preview_omits_select_when_source_is_at_or_below_the_band(rate):
+    """A factor of 1 keeps every frame, so the chain segment is dropped entirely."""
+    assert _preview_of(rate).filters == ""
+
+
+def test_with_preview_gop_is_two_seconds_of_preview_frames():
+    params = _preview_of("500/1").codec_params
+    assert params[params.index("-g") + 1] == "50"
+
+
+def test_with_preview_defaults_to_passthrough_fps_mode():
+    assert _preview_of("500/1").fps_mode == "passthrough"
+
+
+def test_with_preview_tags_colour_and_faststart():
+    assert _preview_of("500/1").output_flags == ("-movflags", "+faststart+write_colr")
+
+
+def test_with_preview_inherits_profile_metadata():
+    assert _preview_of("500/1").metadata == OFFLINE_8BIT.metadata
+
+
+def test_with_preview_raises_without_readable_rate():
+    with pytest.raises(RuntimeError, match="r_frame_rate"):
+        with_preview(OFFLINE_8BIT, {"streams": [{}]})
+
+
+def test_with_preview_rejects_nonpositive_target():
+    with pytest.raises(ValueError, match="must be positive"):
+        _preview_of("500/1", target_fps=0.0)
+
+
+def test_with_preview_rejects_duplicate_suffix():
+    once = with_preview(OFFLINE_8BIT, {"streams": [{"r_frame_rate": "500/1"}]})
+    with pytest.raises(ValueError, match="same path"):
+        with_preview(once, {"streams": [{"r_frame_rate": "500/1"}]})
+
+
+def test_with_preview_appends_to_existing_derivatives():
+    base = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(suffix="_other"),))
+    grown = with_preview(base, {"streams": [{"r_frame_rate": "500/1"}]})
+    assert [d.suffix for d in grown.derivatives] == ["_other", "_preview"]
+
+
+# ---------------------------------------------------------------------------
+# with_poster
+# ---------------------------------------------------------------------------
+
+
+def _poster_of(rate: str = "500/1", nb_frames: str | None = None, **kwargs) -> Derivative:
+    stream: dict = {"r_frame_rate": rate}
+    if nb_frames is not None:
+        stream["nb_frames"] = nb_frames
+    return with_poster(OFFLINE_8BIT, {"streams": [stream]}, **kwargs).derivatives[0]
+
+
+def _poster_frame(derivative: Derivative) -> int:
+    match = re.search(r"eq\(n\\,(\d+)\)", derivative.filters)
+    assert match is not None, derivative.filters
+    return int(match.group(1))
+
+
+@pytest.mark.parametrize(("at_seconds", "frame"), [(1.0, 500), (0.1, 50), (0.0, 0), (2.5, 1250)])
+def test_with_poster_turns_seconds_into_a_frame_index(at_seconds, frame):
+    assert _poster_frame(_poster_of(nb_frames="42000", at_seconds=at_seconds)) == frame
+
+
+def test_with_poster_clamps_to_the_last_frame():
+    """Past the end, select would match nothing and ffmpeg would write no still
+    while still exiting zero."""
+    assert _poster_frame(_poster_of(nb_frames="30", at_seconds=1.0)) == 29
+
+
+def test_with_poster_cannot_clamp_without_a_frame_count():
+    assert _poster_frame(_poster_of(at_seconds=1.0)) == 500
+
+
+def test_with_poster_taps_the_conditioned_source():
+    assert _poster_of().tap == "source"
+
+
+def test_with_poster_carries_no_setparams_of_its_own():
+    """The conditioning upstream of the tap supplies it, range_override included."""
+    assert "setparams" not in _poster_of().filters
+
+
+def test_with_poster_encodes_srgb_from_linear():
+    filters = _poster_of().filters
+    assert filters.startswith("select=")  # select first, so the colour work runs on one frame
+    assert filters.endswith("zscale=t=iec61966-2-1:r=full")
+
+
+def test_with_poster_writes_one_image():
+    poster = _poster_of()
+    assert poster.output_flags == ("-frames:v", "1", "-update", "1")
+    assert poster.codec == "mjpeg"
+    assert poster.container == "jpg"
+
+
+def test_with_poster_rejects_negative_seconds():
+    with pytest.raises(ValueError, match="must not be negative"):
+        _poster_of(at_seconds=-1.0)
+
+
+def test_with_poster_rejects_duplicate_suffix():
+    once = with_poster(OFFLINE_8BIT, {"streams": [{"r_frame_rate": "500/1"}]})
+    with pytest.raises(ValueError, match="same path"):
+        with_poster(once, {"streams": [{"r_frame_rate": "500/1"}]})
+
+
+def test_with_poster_raises_without_readable_rate():
+    with pytest.raises(RuntimeError, match="r_frame_rate"):
+        with_poster(OFFLINE_8BIT, {"streams": [{}]})
+
+
+def test_preview_and_poster_compose():
+    probe_json = {"streams": [{"r_frame_rate": "500/1", "nb_frames": "42000"}]}
+    profile = with_poster(with_preview(OFFLINE_8BIT, probe_json), probe_json)
+    assert [d.suffix for d in profile.derivatives] == ["_preview", "_poster"]
+    assert [d.tap for d in profile.derivatives] == ["shared", "source"]
+    assert profile.output_paths(Path("/d/video.mp4")) == [
+        Path("/d/video.mp4"),
+        Path("/d/video_preview.mp4"),
+        Path("/d/video_poster.jpg"),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# transcode_video with a preview attached
+# ---------------------------------------------------------------------------
+
+
+def _filter_complex(cmd: list) -> str:
+    return cmd[cmd.index("-filter_complex") + 1]
+
+
+def test_preview_command_uses_filter_complex_not_vf(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    assert "-vf" not in captured[0]
+    assert "split=2[main][d0]" in _filter_complex(captured[0])
+
+
+def test_preview_command_keeps_cfr_setpts_at_the_head_of_the_shared_chain(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    assert _filter_complex(captured[0]).startswith("[0:v]setpts=N/(500/1)/TB,")
+
+
+def test_preview_command_writes_both_paths(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    assert captured[0][-1] == str(tmp_path / "out_preview.mp4")
+    assert str(tmp_path / "out.mp4") in captured[0]
+
+
+def test_preview_command_strips_audio_from_every_output(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0, no_audio=True)
+    assert captured[0].count("-an") == 2
+
+
+def test_transcode_video_returns_primary_path_only(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    assert transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0) == tmp_path / "out.mp4"
+
+
+def test_no_preview_by_default(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+    assert "-filter_complex" not in captured[0]
+    assert "-vf" in captured[0]
+
+
+def test_fail_on_frame_drop_rejects_non_passthrough_derivative(monkeypatch, tmp_path):
+    """drop/dup counters are process-wide, so a duplicating derivative would
+    indict the primary encode."""
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(fps_mode="cfr"),))
+    with pytest.raises(ValueError, match="fps_mode"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile, fail_on_frame_drop=True)
+
+
+def test_non_passthrough_derivative_allowed_without_the_guard(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(fps_mode="cfr"),))
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile, fail_on_frame_drop=False)
+    assert "-fps_mode" in captured[0]
+
+
+@ffmpeg_required
+def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
+    """A 500 fps source yields a 25 fps preview whose frame k is source frame 20k.
+
+    Covers the whole mechanism end-to-end: ffmpeg accepts the split graph, the
+    escaped comma in ``mod(n\\,20)`` parses, ``fps_mode=passthrough`` stops the
+    CFR stage duplicating the retained frames back up to 500 fps, and the
+    default ``fail_on_frame_drop`` does not fire on the aggregate counters.
+    """
+    src = tmp_path / "src.avi"
+    dst = tmp_path / "out.mp4"
+    preview = tmp_path / "out_preview.mp4"
+    # Widely separated luma so a one-frame misalignment cannot hide inside
+    # encoder noise: adjacent retained frames differ by >= 20 after the chain.
+    _encode_untagged_yuv420p(src, [30 + 2 * n for n in range(100)], framerate=500)
+
+    fast = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    assert transcode_video(src, dst, profile=fast, preview_fps=25.0) == dst
+    assert preview.exists()
+
+    def _probe_stream(path: Path) -> dict:
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames,r_frame_rate,width,height,color_transfer",
+                "-of",
+                "json",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(out.stdout)["streams"][0]
+
+    main_info, preview_info = _probe_stream(dst), _probe_stream(preview)
+    assert int(main_info["nb_read_frames"]) == 100
+    assert int(preview_info["nb_read_frames"]) == 5
+    assert preview_info["r_frame_rate"] == "25/1"
+    # Geometry is untouched: frame rate, not resolution, is what blocks playback.
+    assert (preview_info["width"], preview_info["height"]) == (main_info["width"], main_info["height"])
+    # write_colr must tag the preview too, or it renders unlike the file it stands for.
+    assert preview_info["color_transfer"] == main_info["color_transfer"] == "bt709"
+
+    main_y = _decode_center_luma(dst, 100)
+    preview_y = _decode_center_luma(preview, 5)
+    for k, y in enumerate(preview_y):
+        assert abs(y - main_y[20 * k]) <= 2, f"preview frame {k} is not source frame {20 * k}"

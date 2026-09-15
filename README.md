@@ -108,6 +108,59 @@ transcode_video(input_path, output_path, profile=fast)
 transcode_video(input_path, output_path, auto_fix_colorspace=False)
 ```
 
+### Preview and Poster Derivatives
+
+`transcode_video()` can also write a browser-playable preview and a JPEG
+poster, as extra outputs of the same ffmpeg process:
+
+```python
+from aind_video_utils import transcode_video
+
+transcode_video(
+    input_path,
+    output_path,            # clip.mp4          archival, frame-exact
+    preview_fps=30.0,       # clip_preview.mp4  every N-th source frame
+    poster_at_seconds=1.0,  # clip_poster.jpg   sRGB still
+)
+```
+
+N puts the preview between 25 and 35 fps, preferring a whole-number rate:
+
+| Source | N | Preview |
+|--------|---|---------|
+| 1000 fps | 40 | 25 fps |
+| 500 fps | 20 | 25 fps |
+| 300 fps | 10 | 30 fps |
+| 240 fps | 8 | 30 fps |
+| 120 fps | 4 | 30 fps |
+| 29.97 fps | 1 | 29.97 fps |
+
+The poster branches off the source ahead of the BT.709 chain, because browsers
+read JPEG as sRGB. The
+[behavior video standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/#preview-videos)
+gives the rationale for both.
+
+To build the command yourself, attach derivatives to a conditioned profile.
+Without `with_setparams`, the poster's `zscale` has no transfer function to
+resolve, and its failure takes the archival encode down with it:
+
+```python
+from aind_video_utils import (
+    OFFLINE_8BIT, probe, with_poster, with_preview, with_setparams,
+)
+
+probe_json = probe(input_path)
+conditioned = with_setparams(OFFLINE_8BIT, probe_json)
+profile = with_poster(with_preview(conditioned, probe_json), probe_json)
+
+profile.output_paths(output_path)  # [clip.mp4, clip_preview.mp4, clip_poster.jpg]
+profile.ffmpeg_graph_args()        # ["-filter_complex", "[0:v]setparams=...,split=2[chain][d1];..."]
+profile.ffmpeg_output_groups()     # one argument list per output, in the same order
+```
+
+`ffmpeg_output_args()` raises for a profile with derivatives, since one `-vf`
+cannot branch. The `aind-transcode` CLI does not expose derivatives yet.
+
 ### Transcode CLI
 
 With the `transcode` extra installed, the `aind-transcode` command is available:
