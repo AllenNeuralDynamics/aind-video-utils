@@ -171,9 +171,7 @@ class Derivative:
         Value for ``-fps_mode``.  Leave it at ``"passthrough"`` for any
         frame-dropping derivative: ``select`` and friends drop frames without
         updating the filter link's advertised frame rate, so a constant-frame-rate
-        stage -- which ffmpeg's default picks for muxers that cannot store
-        variable timing -- duplicates every retained frame back up to the source
-        rate.
+        stage duplicates every retained frame back up to the source rate.
     tap : {"shared", "source"}
         Where this derivative branches from.  ``"shared"`` (the default) takes
         the output of :attr:`EncodingProfile.video_filters`, so the derivative
@@ -193,7 +191,7 @@ class Derivative:
         measures *worse* than leaving it alone, because zimg treats BT.709 as
         BT.1886 and the round trip compounds the error.  Branching ahead of the
         BT.709 OETF and encoding sRGB straight from linear light is accurate to
-        within one code.
+        within two codes.
 
         Order ``select`` first in a source-tapped chain when only a few frames
         are wanted -- the rest of the chain then runs on those frames alone, so
@@ -701,8 +699,7 @@ def with_preview(
         # GOPs of at most two seconds: x264's 250-frame default is a 10 s keyframe
         # interval at preview rates, which makes browser scrubbing sluggish.
         codec_params=("-preset", x264_preset, "-crf", str(crf), "-g", str(max(1, round(2 * preview_fps)))),
-        # write_colr matters as much here as on the archive: an untagged preview
-        # renders with different colour than the file it stands in for.
+        # The archive's muxer flags, so both files carry the same colour atom.
         output_flags=("-movflags", "+faststart+write_colr"),
         metadata=profile.metadata,
     )
@@ -727,7 +724,7 @@ def with_poster(
     BT.709.  Converting the archive's output to sRGB afterwards measures worse
     than not converting at all -- zimg treats BT.709 as BT.1886, so the round
     trip compounds the error rather than removing it.  Encoding sRGB straight
-    from linear light lands within one code instead.
+    from linear light lands within two codes instead.
 
     Tapping the source costs nothing extra: ``select`` runs first, so the rest
     of the chain sees one frame.  It also means the still inherits the profile's
@@ -744,8 +741,8 @@ def with_poster(
         Probe result for the source, read for ``r_frame_rate`` and the frame
         count.
     at_seconds : float
-        How far into the video to sample.  Sampling a little way in beats frame
-        0, which is often blank, dark or mid-transition.  The frame index is
+        How far into the video to sample.  Sampling a little way in beats the
+        first frame, which can be blank or dark.  The frame index is
         clamped to the last frame when the probe reports a count.
     suffix : str
         Stem suffix for the still.
@@ -771,8 +768,8 @@ def with_poster(
     ``at_seconds``, ``select`` matches nothing: ffmpeg writes no still and still
     exits zero, so the absence is silent.
 
-    The still carries no ``-metadata``; ffmpeg's image2 muxer does not reliably
-    embed it in a JPEG.
+    The still carries no ``-metadata``, since ffmpeg writes none of it into a
+    JPEG.
     """
     if at_seconds < 0:
         raise ValueError(f"at_seconds must not be negative, got {at_seconds}")

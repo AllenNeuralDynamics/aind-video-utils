@@ -1043,7 +1043,7 @@ def test_shared_tap_graph_is_unchanged_by_tap_support():
 
 @ffmpeg_required
 def test_archive_preview_and_poster_from_one_invocation(tmp_path: Path) -> None:
-    """One transcode writes archive, preview and an sRGB still accurate to a code.
+    """One transcode writes archive, preview and an sRGB still accurate to two codes.
 
     Converting the archive's BT.709 output to sRGB after the fact measures worse
     than not converting at all, because zimg treats BT.709 as BT.1886.  Tapping
