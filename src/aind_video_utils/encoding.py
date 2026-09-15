@@ -628,7 +628,7 @@ def with_preview(
     target_fps: float = 30.0,
     fps_band: tuple[float, float] = (25.0, 35.0),
     suffix: str = "_preview",
-    crf: int = 24,
+    crf: int = 27,
     x264_preset: str = "medium",
 ) -> EncodingProfile:
     """Append a frame-decimated, browser-playable preview derivative to *profile*.
@@ -698,7 +698,7 @@ def with_preview(
         pixel_format="yuv420p",
         container="mp4",
         filters=filters,
-        # Two seconds per GOP: x264's 250-frame default is a 10 s keyframe
+        # GOPs of at most two seconds: x264's 250-frame default is a 10 s keyframe
         # interval at preview rates, which makes browser scrubbing sluggish.
         codec_params=("-preset", x264_preset, "-crf", str(crf), "-g", str(max(1, round(2 * preview_fps)))),
         # write_colr matters as much here as on the archive: an untagged preview
