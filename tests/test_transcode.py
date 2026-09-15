@@ -259,7 +259,19 @@ def test_online_10bit_output_args():
 
 
 def test_online_10bit_input_args():
-    assert ONLINE_10BIT.ffmpeg_input_args() == []
+    # Same tags as ONLINE_8BIT: an untagged rig stream would otherwise reach
+    # scale=out_range=full as limited range and be stretched.
+    assert ONLINE_10BIT.ffmpeg_input_args() == ONLINE_8BIT.ffmpeg_input_args()
+    assert ONLINE_10BIT.ffmpeg_input_args() == [
+        "-colorspace",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-color_range",
+        "full",
+        "-color_trc",
+        "linear",
+    ]
 
 
 def test_online_10bit_container():

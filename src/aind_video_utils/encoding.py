@@ -466,7 +466,7 @@ ONLINE_10BIT = EncodingProfile(
     pixel_format="p010le",
     container="mkv",
     codec_params=("-tune", "hq", "-preset", "p4", "-rc", "vbr", "-cq", "12", "-b:v", "0M"),
-    input_flags=(),
+    input_flags=("-colorspace", "bt709", "-color_primaries", "bt709", "-color_range", "full", "-color_trc", "linear"),
     output_flags=(
         "-color_range",
         "full",
