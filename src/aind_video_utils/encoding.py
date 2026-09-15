@@ -406,6 +406,8 @@ OFFLINE_8BIT = EncodingProfile(
 
 OFFLINE_10BIT = EncodingProfile(
     video_filters=(
+        "scale=out_color_matrix=bt709:out_range=full:flags=accurate_rnd+full_chroma_int+full_chroma_inp:sws_dither=none,"
+        "format=yuv420p10le,"
         "colorspace=all=bt709:dither=none,"
         "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=none,"
         "format=yuv420p10le"

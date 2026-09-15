@@ -125,6 +125,8 @@ def test_offline_10bit_output_args():
     args = OFFLINE_10BIT.ffmpeg_output_args()
     assert args == [
         "-vf",
+        "scale=out_color_matrix=bt709:out_range=full:flags=accurate_rnd+full_chroma_int+full_chroma_inp:sws_dither=none,"
+        "format=yuv420p10le,"
         "colorspace=all=bt709:dither=none,"
         "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=none,"
         "format=yuv420p10le",
