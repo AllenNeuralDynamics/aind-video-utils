@@ -629,7 +629,7 @@ def with_preview(
     fps_band: tuple[float, float] = (25.0, 35.0),
     suffix: str = "_preview",
     crf: int = 24,
-    x264_preset: str = "veryfast",
+    x264_preset: str = "medium",
 ) -> EncodingProfile:
     """Append a frame-decimated, browser-playable preview derivative to *profile*.
 
@@ -670,8 +670,8 @@ def with_preview(
     crf : int
         x264 quality for the preview, which trades directly against its size.
     x264_preset : str
-        x264 speed preset.  Kept fast because two encoders share the machine
-        with the archival encode, whose throughput is what actually matters.
+        x264 speed preset.  The preview encodes a small fraction of the
+        archive's frames, so a slower preset costs the process little time.
 
     Returns
     -------
