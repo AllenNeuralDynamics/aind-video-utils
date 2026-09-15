@@ -36,7 +36,7 @@ ffmpeg_required = pytest.mark.skipif(
 
 def test_spec_version_is_string():
     assert isinstance(SPEC_VERSION, str)
-    assert SPEC_VERSION == "1.0"
+    assert SPEC_VERSION == "0.3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def test_replace_returns_new_instance():
     assert fast is not OFFLINE_8BIT
     assert fast.codec_params == ("-preset", "veryfast", "-crf", "18")
     # Original unchanged
-    assert OFFLINE_8BIT.codec_params == ("-preset", "veryslow", "-crf", "18")
+    assert OFFLINE_8BIT.codec_params == ("-preset", "slow", "-crf", "18")
 
 
 def test_replace_preserves_other_fields():
@@ -91,7 +91,7 @@ def test_offline_8bit_output_args():
         "-pix_fmt",
         "yuv420p",
         "-preset",
-        "veryslow",
+        "slow",
         "-crf",
         "18",
         "-metadata",
@@ -126,7 +126,7 @@ def test_offline_10bit_output_args():
         "-pix_fmt",
         "yuv420p10le",
         "-preset",
-        "veryslow",
+        "slow",
         "-crf",
         "18",
         "-metadata",

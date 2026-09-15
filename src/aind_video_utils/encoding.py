@@ -29,9 +29,10 @@ from aind_video_utils.probe import (
 
 RangeOverride = Literal["pc", "tv"]
 
-SPEC_VERSION: str = "1.0"
-"""Tracks which revision of the aind-file-standards behavior video spec
-the profiles implement.  Independent of the package version."""
+SPEC_VERSION: str = "0.3.0"
+"""Version of the aind-file-standards behavior video spec these profiles
+implement, matching the ``## Version`` heading of that document.  Independent
+of this package's own version."""
 
 # ---------------------------------------------------------------------------
 # Setparams filter — fill missing color metadata only
@@ -183,7 +184,7 @@ OFFLINE_8BIT = EncodingProfile(
     codec="libx264",
     pixel_format="yuv420p",
     container="mp4",
-    codec_params=("-preset", "veryslow", "-crf", "18"),
+    codec_params=("-preset", "slow", "-crf", "18"),
     input_flags=(),
     output_flags=("-movflags", "+faststart+write_colr"),
     metadata=_AIND_METADATA,
@@ -198,7 +199,7 @@ OFFLINE_10BIT = EncodingProfile(
     codec="libx264",
     pixel_format="yuv420p10le",
     container="mp4",
-    codec_params=("-preset", "veryslow", "-crf", "18"),
+    codec_params=("-preset", "slow", "-crf", "18"),
     input_flags=(),
     output_flags=("-movflags", "+faststart+write_colr"),
     metadata=_AIND_METADATA,
