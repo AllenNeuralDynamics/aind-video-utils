@@ -91,7 +91,7 @@ def test_offline_8bit_output_args():
         ":flags=accurate_rnd+full_chroma_int+full_chroma_inp:sws_dither=none,"
         "format=yuv420p10le,"
         "colorspace=all=bt709:dither=none,"
-        "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=ed,"
+        "scale=out_range=tv:flags=accurate_rnd+full_chroma_int:sws_dither=bayer,"
         "format=yuv420p",
         "-c:v",
         "libx264",
