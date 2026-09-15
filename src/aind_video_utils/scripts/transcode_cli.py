@@ -84,6 +84,13 @@ class TranscodeSettings(BaseSettings):
             "sources that are TV-range encoded but tagged otherwise."
         ),
     )
+    normalize_cfr: bool = Field(
+        False,
+        description=(
+            "Re-stamp every frame's timestamp from its index at the source frame rate.  "
+            "Legacy h264-in-AVI sources need it, or ffmpeg drops frames."
+        ),
+    )
     overwrite: bool = Field(False, description="Re-encode even if output exists.")
     jobs: int = Field(
         default_factory=lambda: max(1, (os.cpu_count() or 1) // 2),
@@ -232,6 +239,7 @@ class TranscodeSettings(BaseSettings):
                     profile=resolved,
                     auto_fix_colorspace=not self.no_auto_fix_colorspace,
                     range_override=self.range_override,
+                    normalize_cfr=self.normalize_cfr,
                     on_progress=_on_frame,
                 )
 
@@ -253,18 +261,23 @@ class TranscodeSettings(BaseSettings):
                             completed=progress.tasks[tid].total or 1,
                             total=progress.tasks[tid].total or 1,
                         )
-                    except subprocess.CalledProcessError as exc:
+                    except (subprocess.CalledProcessError, RuntimeError) as exc:
                         failed += 1
-                        stderr = exc.stderr
-                        if isinstance(stderr, bytes):
-                            stderr = stderr.decode(errors="replace")
+                        if isinstance(exc, subprocess.CalledProcessError):
+                            stderr = exc.stderr
+                            if isinstance(stderr, bytes):
+                                stderr = stderr.decode(errors="replace")
+                            # ffmpeg logs the fatal error last.
+                            detail = (stderr or "")[-500:]
+                        else:
+                            detail = str(exc)
                         progress.update(
                             tid,
                             description=f"  [red]FAIL[/red]  {src.name}",
                             completed=progress.tasks[tid].total or 1,
                             total=progress.tasks[tid].total or 1,
                         )
-                        progress.console.print(f"    {(stderr or '')[:500]}")
+                        progress.console.print(f"    {detail}")
                     progress.update(overall, advance=1)
 
         console.print(

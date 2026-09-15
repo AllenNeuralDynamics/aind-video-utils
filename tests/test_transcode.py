@@ -577,31 +577,55 @@ def test_get_r_frame_rate_returns_none_on_bad_input(rate):
 
 
 # ---------------------------------------------------------------------------
-# transcode_video: CFR normalization + frame-drop guard
+# transcode_video: CFR normalization + frame-count check
 #
 # These are deterministic unit tests over the command construction and the
-# progress-counter check; they fake the ffmpeg subprocess so they need neither
+# frame-count check; they fake the ffmpeg subprocess so they need neither
 # ffmpeg nor a (hard-to-synthesize) drop-prone source. A drop-prone h264-in-AVI
-# fixture isn't portable to CI, so the frame loss is covered here by injecting a
-# drop_frames line into the faked progress stream.
+# fixture isn't portable to CI, so the frame loss is covered here by feeding
+# ffmpeg's end-of-run totals into the faked stderr.
 # ---------------------------------------------------------------------------
 
 
 class _FakePopen:
-    """Stand-in for subprocess.Popen that replays a fixed progress stream."""
+    """Stand-in for subprocess.Popen that replays fixed progress and log streams."""
 
-    def __init__(self, cmd, *, stdout_bytes: bytes, returncode: int, capture: list):
+    def __init__(self, cmd, *, stdout_bytes: bytes, stderr_bytes: bytes, returncode: int, capture: list):
         self.args = cmd
         capture.append(cmd)
         self.stdout = io.BytesIO(stdout_bytes)
-        self.stderr = io.BytesIO(b"")
+        self.stderr = io.BytesIO(stderr_bytes)
         self._returncode = returncode
 
     def wait(self):
         return self._returncode
 
 
-def _patch_ffmpeg(monkeypatch, *, stdout_bytes: bytes, returncode: int = 0, rate: str | None = "500/1"):
+def _summary(decoded: int, *encoded: int, decode_errors: int = 0) -> bytes:
+    """ffmpeg's end-of-run totals, one output per *encoded* count, as ``-loglevel level+verbose`` logs them."""
+    lines = [
+        f"[out#{i}/mp4 @ 0x1] [verbose]   Output stream #{i}:0 (video): "
+        f"{n} frames encoded; {n} packets muxed (1 bytes); \n"
+        for i, n in enumerate(encoded)
+    ]
+    lines.append(
+        f"[in#0/avi @ 0x2] [verbose]   Input stream #0:0 (video): {decoded} packets read (1 bytes); "
+        f"{decoded} frames decoded; {decode_errors} decode errors; \n"
+    )
+    return "".join(lines).encode()
+
+
+_CLEAN_SUMMARY = _summary(100, 100)
+
+
+def _patch_ffmpeg(
+    monkeypatch,
+    *,
+    stdout_bytes: bytes,
+    stderr_bytes: bytes = _CLEAN_SUMMARY,
+    returncode: int = 0,
+    rate: str | None = "500/1",
+):
     """Fake out probe() and subprocess.Popen; return the list capturing argv."""
     captured: list = []
 
@@ -609,7 +633,9 @@ def _patch_ffmpeg(monkeypatch, *, stdout_bytes: bytes, returncode: int = 0, rate
         return {"streams": [{"pix_fmt": "gbrp", "color_space": "gbr", "color_range": "pc", "r_frame_rate": rate}]}
 
     def fake_popen(cmd, stdout=None, stderr=None):
-        return _FakePopen(cmd, stdout_bytes=stdout_bytes, returncode=returncode, capture=captured)
+        return _FakePopen(
+            cmd, stdout_bytes=stdout_bytes, stderr_bytes=stderr_bytes, returncode=returncode, capture=captured
+        )
 
     monkeypatch.setattr(transcode_mod, "probe", fake_probe)
     monkeypatch.setattr(transcode_mod.subprocess, "Popen", fake_popen)
@@ -620,8 +646,7 @@ def _vf_value(cmd: list) -> str:
     return cmd[cmd.index("-vf") + 1]
 
 
-_CLEAN_PROGRESS = b"frame=100\ndrop_frames=0\ndup_frames=0\nprogress=end\n"
-_DROP_PROGRESS = b"frame=94\ndrop_frames=6\ndup_frames=0\nprogress=end\n"
+_CLEAN_PROGRESS = b"frame=100\nprogress=end\n"
 
 
 def test_normalize_cfr_prepends_setpts(monkeypatch, tmp_path):
@@ -648,14 +673,44 @@ def test_normalize_cfr_raises_without_readable_rate(monkeypatch, tmp_path):
         transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
 
 
-def test_fail_on_frame_drop_raises_on_dropped_frames(monkeypatch, tmp_path):
-    _patch_ffmpeg(monkeypatch, stdout_bytes=_DROP_PROGRESS)
-    with pytest.raises(RuntimeError, match="drop_frames=6"):
-        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", fail_on_frame_drop=True)
+def test_normalize_cfr_is_off_by_default(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+    assert "setpts" not in _vf_value(captured[0])
 
 
-def test_fail_on_frame_drop_off_allows_dropped_frames(monkeypatch, tmp_path):
-    _patch_ffmpeg(monkeypatch, stdout_bytes=_DROP_PROGRESS)
+def test_ffmpeg_logs_level_tagged_verbose(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+    assert captured[0][1:4] == ["-hide_banner", "-loglevel", "level+verbose"]
+
+
+def test_fail_on_frame_drop_raises_when_frames_go_missing(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(1000, 994))
+    with pytest.raises(RuntimeError, match=r"994 frames but ffmpeg decoded 1000 .*normalize_cfr=True"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+
+
+def test_fail_on_frame_drop_raises_on_duplicated_frames(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(100, 101))
+    with pytest.raises(RuntimeError, match="101 frames but ffmpeg decoded 100"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+
+
+def test_fail_on_frame_drop_raises_on_decode_errors(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(100, 100, decode_errors=2))
+    with pytest.raises(RuntimeError, match="2 decode error"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+
+
+def test_fail_on_frame_drop_raises_without_frame_totals(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=b"")
+    with pytest.raises(RuntimeError, match="no video frame totals"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+
+
+def test_fail_on_frame_drop_off_accepts_missing_frames(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(1000, 994))
     out = transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", fail_on_frame_drop=False)
     assert out == tmp_path / "out.mp4"
 
@@ -666,17 +721,30 @@ def test_frame_exact_output_does_not_raise(monkeypatch, tmp_path):
     assert out == tmp_path / "out.mp4"
 
 
+def test_ffmpeg_failure_reports_warnings_and_errors_only(monkeypatch, tmp_path):
+    log = (
+        b"[info] Stream mapping:\n"
+        b"[verbose] filter graph chatter\n"
+        b"[AVFilterGraph @ 0x1] [error] No such filter: 'x'\n"
+        b"[fatal] Error opening output files: Filter not found\n"
+    )
+    _patch_ffmpeg(monkeypatch, stdout_bytes=b"", stderr_bytes=log, returncode=8)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+    assert excinfo.value.stderr == b"".join(log.splitlines(keepends=True)[2:])
+
+
 @ffmpeg_required
 def test_transcode_video_preserves_frame_count_and_zero_start(tmp_path: Path) -> None:
-    """End-to-end happy path: a clean CFR source transcodes with defaults
-    (normalize_cfr + fail_on_frame_drop on) without dropping frames, lands at
-    PTS 0, and keeps every source frame."""
+    """End-to-end happy path: a clean CFR source transcodes with CFR
+    normalization and the frame-count check on, lands at PTS 0, and keeps every
+    source frame."""
     src = tmp_path / "src.mp4"
     dst = tmp_path / "dst.mp4"
     _encode_untagged_yuv420p(src, [20, 40, 60, 80, 100, 120])
 
     profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
-    transcode_video(src, dst, profile=profile)  # defaults: normalize_cfr=True, fail_on_frame_drop=True
+    transcode_video(src, dst, profile=profile, normalize_cfr=True)
 
     def _count(path: Path) -> int:
         out = subprocess.run(
@@ -719,6 +787,30 @@ def test_transcode_video_preserves_frame_count_and_zero_start(tmp_path: Path) ->
 
     assert _count(dst) == _count(src) == 6
     assert float(start) == 0.0
+
+
+@ffmpeg_required
+def test_frame_check_catches_a_frame_a_filter_drops(tmp_path: Path) -> None:
+    """A frame dropped inside the filter graph never registers as a vsync drop,
+    but ffmpeg's end-of-run totals still come up one short."""
+    src = tmp_path / "src.mp4"
+    _encode_untagged_yuv420p(src, [20, 40, 60, 80, 100, 120])
+    profile = OFFLINE_8BIT.replace(
+        video_filters="select=not(eq(n\\,2)),format=yuv420p",
+        codec_params=("-preset", "ultrafast", "-crf", "18"),
+    )
+    with pytest.raises(RuntimeError, match="5 frames but ffmpeg decoded 6"):
+        transcode_video(src, tmp_path / "dst.mp4", profile=profile)
+
+
+@ffmpeg_required
+def test_ffmpeg_failure_carries_the_error_line(tmp_path: Path) -> None:
+    src = tmp_path / "src.mp4"
+    _encode_untagged_yuv420p(src, [20, 40])
+    profile = OFFLINE_8BIT.replace(video_filters="nosuchfilter")
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        transcode_video(src, tmp_path / "dst.mp4", profile=profile)
+    assert b"[error] No such filter: 'nosuchfilter'" in excinfo.value.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1353,7 @@ def test_preview_command_uses_filter_complex_not_vf(monkeypatch, tmp_path):
 
 def test_preview_command_keeps_cfr_setpts_at_the_head_of_the_shared_chain(monkeypatch, tmp_path):
     captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
-    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0, normalize_cfr=True)
     assert _filter_complex(captured[0]).startswith("[0:v]setpts=N/(500/1)/TB,")
 
 
@@ -1290,19 +1382,17 @@ def test_no_preview_by_default(monkeypatch, tmp_path):
     assert "-vf" in captured[0]
 
 
-def test_fail_on_frame_drop_rejects_non_passthrough_derivative(monkeypatch, tmp_path):
-    """drop/dup counters are process-wide, so a duplicating derivative would
-    indict the primary encode."""
-    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
-    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(fps_mode="cfr"),))
-    with pytest.raises(ValueError, match="fps_mode"):
-        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile, fail_on_frame_drop=True)
+def test_frame_check_reads_the_primary_output_only(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(500, 500, 25), rate="500/1")
+    assert transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0) == tmp_path / "out.mp4"
 
 
-def test_non_passthrough_derivative_allowed_without_the_guard(monkeypatch, tmp_path):
-    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+def test_non_passthrough_derivative_passes_the_frame_check(monkeypatch, tmp_path):
+    """Totals are per output, so a derivative's fps_mode cannot indict the primary encode."""
+    stderr = _summary(100, 100, 250)
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=stderr, rate="500/1")
     profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(fps_mode="cfr"),))
-    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile, fail_on_frame_drop=False)
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile)
     assert "-fps_mode" in captured[0]
 
 
@@ -1312,8 +1402,8 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
 
     Covers the whole mechanism end-to-end: ffmpeg accepts the split graph, the
     escaped comma in ``mod(n\\,20)`` parses, ``fps_mode=passthrough`` stops the
-    CFR stage duplicating the retained frames back up to 500 fps, and the
-    default ``fail_on_frame_drop`` does not fire on the aggregate counters.
+    CFR stage duplicating the retained frames back up to 500 fps, and the frame
+    check reads the archive's totals rather than the preview's.
     """
     src = tmp_path / "src.avi"
     dst = tmp_path / "out.mp4"

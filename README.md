@@ -106,7 +106,14 @@ transcode_video(input_path, output_path, profile=fast)
 
 # Skip automatic setparams probing
 transcode_video(input_path, output_path, auto_fix_colorspace=False)
+
+# Legacy h264-in-AVI sources: re-stamp timestamps so ffmpeg keeps every frame
+transcode_video(input_path, output_path, normalize_cfr=True)
 ```
+
+`transcode_video()` raises `RuntimeError` when the output holds a different
+number of frames than ffmpeg decoded from the source; pass
+`fail_on_frame_drop=False` to accept such an output.
 
 ### Preview and Poster Derivatives
 
@@ -170,7 +177,8 @@ aind-transcode videos/                                # defaults: offline-8bit, 
 aind-transcode videos/ --profile offline-10bit        # explicit profile
 aind-transcode videos/ --preset veryfast              # override speed
 aind-transcode videos/ --crf 20 --preset veryfast     # override quality + speed
-aind-transcode videos/ --no-auto-fix-colorspace       # skip setparams probing
+aind-transcode videos/ --no_auto_fix_colorspace true  # skip setparams probing
+aind-transcode videos/ --normalize_cfr true           # legacy h264-in-AVI sources
 aind-transcode videos/ --jobs 4                       # parallel workers
 ```
 

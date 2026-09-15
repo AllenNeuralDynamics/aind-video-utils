@@ -172,9 +172,6 @@ class Derivative:
         frame-dropping derivative: ``select`` and friends drop frames without
         updating the filter link's advertised frame rate, so ffmpeg's default
         CFR stage duplicates every retained frame back up to the source rate.
-        ``"passthrough"`` also cannot duplicate frames at all, which is what
-        keeps a nonzero process-wide ``dup_frames`` attributable to the primary
-        output -- see ``transcode_video``'s ``fail_on_frame_drop``.
     tap : {"shared", "source"}
         Where this derivative branches from.  ``"shared"`` (the default) takes
         the output of :attr:`EncodingProfile.video_filters`, so the derivative
@@ -647,10 +644,10 @@ def with_preview(
     whenever the ratio is not an integer, costing the property that makes this
     useful for QC: preview frame *k* is source frame *kN*, exactly.
 
-    No ``setpts`` accompanies the ``select``: ``transcode_video``'s
-    ``normalize_cfr`` has already rebased the shared chain to PTS 0, and frame 0
-    always survives ``mod(n, factor)``, so the retained frames keep both their
-    zero origin and their real-time spacing.
+    No ``setpts`` accompanies the ``select``: frame 0 always survives
+    ``mod(n, factor)`` and every retained frame keeps the shared chain's
+    timestamp, so the preview starts where the archive does and keeps real-time
+    spacing.
 
     The preview ends at its last retained frame, so it can end up to ``N - 1``
     source frames before the archive (38 ms for 500 fps decimated by 20).

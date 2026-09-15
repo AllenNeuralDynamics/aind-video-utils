@@ -6,8 +6,12 @@ CLI and available as a Python API.
 
 from __future__ import annotations
 
+import re
 import subprocess
-from collections.abc import Callable
+import threading
+from collections import deque
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from aind_video_utils.encoding import (
@@ -32,6 +36,30 @@ VIDEO_EXTENSIONS: frozenset[str] = frozenset(
         ".wmv",
     }
 )
+
+# ffmpeg logs its end-of-run per-stream totals only at verbose, and the level
+# tag on every line keeps warnings and errors separable from that chatter.
+_FFMPEG_LOG_ARGS: tuple[str, ...] = ("-hide_banner", "-loglevel", "level+verbose")
+_ENCODED_RE = re.compile(rb"Output stream #(\d+):\d+ \(video\): (\d+) frames encoded")
+_DECODED_RE = re.compile(
+    rb"Input stream #\d+:\d+ \(video\): \d+ packets read \(\d+ bytes\); "
+    rb"(\d+) frames decoded(?:; (\d+) decode errors)?"
+)
+_PROBLEM_RE = re.compile(rb"\[(?:warning|error|fatal|panic)\]")
+_STDERR_TAIL_LINES = 200
+
+
+@dataclass
+class _FrameCounts:
+    """Video frame totals from ffmpeg's end-of-run summary.
+
+    ``decoded`` has one entry per input video stream; ``encoded`` is keyed by
+    output file index, the order outputs appear on the command line.
+    """
+
+    decoded: list[int] = field(default_factory=list)
+    decode_errors: int = 0
+    encoded: dict[int, int] = field(default_factory=dict)
 
 
 def _effective_profile(
@@ -77,47 +105,83 @@ def _effective_profile(
     return effective
 
 
-def _run_ffmpeg(cmd: list[str], *, on_progress: Callable[[int], None] | None) -> tuple[int, int]:
-    """Run *cmd*, forwarding frame progress, and return ``(drop, dup)`` counts.
+def _read_stderr(stream: Iterable[bytes], counts: _FrameCounts, problems: deque[bytes]) -> None:
+    """Collect frame totals and warning/error lines from ffmpeg's stderr.
 
-    ffmpeg's ``-progress`` stream emits cumulative ``key=value`` lines; the last
-    value seen for each counter is the running total.  ``drop_frames`` /
-    ``dup_frames`` report what the implicit vsync stage did to the frame count.
+    Runs on its own thread, since a stderr pipe left unread until exit fills
+    and stalls ffmpeg.
+    """
+    for line in stream:
+        if encoded := _ENCODED_RE.search(line):
+            counts.encoded[int(encoded[1])] = int(encoded[2])
+        elif decoded := _DECODED_RE.search(line):
+            counts.decoded.append(int(decoded[1]))
+            counts.decode_errors += int(decoded[2] or 0)
+        elif _PROBLEM_RE.search(line):
+            problems.append(line)
+
+
+def _run_ffmpeg(cmd: list[str], *, on_progress: Callable[[int], None] | None) -> _FrameCounts:
+    """Run *cmd*, forwarding frame progress, and return ffmpeg's frame totals.
 
     Raises
     ------
     subprocess.CalledProcessError
-        If ffmpeg exits with a non-zero return code.
+        If ffmpeg exits with a non-zero return code.  Its ``stderr`` carries the
+        last warning and error lines rather than the verbose log.
     """
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert proc.stdout is not None
+    assert proc.stdout is not None and proc.stderr is not None
 
-    drop_frames = 0
-    dup_frames = 0
+    counts = _FrameCounts()
+    problems: deque[bytes] = deque(maxlen=_STDERR_TAIL_LINES)
+    reader = threading.Thread(target=_read_stderr, args=(proc.stderr, counts, problems), daemon=True)
+    reader.start()
     for raw_line in proc.stdout:
-        if raw_line.startswith(b"frame="):
-            if on_progress:
-                try:
-                    on_progress(int(raw_line[6:].strip()))
-                except ValueError:
-                    pass
-        elif raw_line.startswith(b"drop_frames="):
+        if raw_line.startswith(b"frame=") and on_progress:
             try:
-                drop_frames = int(raw_line.split(b"=", 1)[1].strip())
+                on_progress(int(raw_line[6:].strip()))
             except ValueError:
                 pass
-        elif raw_line.startswith(b"dup_frames="):
-            try:
-                dup_frames = int(raw_line.split(b"=", 1)[1].strip())
-            except ValueError:
-                pass
-
     returncode = proc.wait()
-    if returncode != 0:
-        stderr = proc.stderr.read() if proc.stderr else b""
-        raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
+    reader.join()
 
-    return drop_frames, dup_frames
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd, stderr=b"".join(problems))
+    return counts
+
+
+def _check_frame_count(counts: _FrameCounts, input_path: Path, output_path: Path) -> None:
+    """Raise unless *output_path* holds exactly the frames ffmpeg decoded from *input_path*.
+
+    Both totals come from the same run, so the check costs no second decode and
+    sees a frame lost anywhere between decoder and muxer.  Frames missing from
+    the source itself are beyond it.
+    """
+    encoded = counts.encoded.get(0)
+    if encoded is None or not counts.decoded:
+        raise RuntimeError(
+            f"ffmpeg reported no video frame totals transcoding {input_path}, so {output_path} cannot be "
+            "checked for frame exactness. Pass fail_on_frame_drop=False to skip the check."
+        )
+    decoded = [n for n in counts.decoded if n]
+    if len(decoded) > 1:
+        raise RuntimeError(
+            f"ffmpeg decoded {len(decoded)} video streams from {input_path}, so {output_path} has no single "
+            "frame count to match. Pass fail_on_frame_drop=False to skip the check."
+        )
+    if counts.decode_errors:
+        raise RuntimeError(
+            f"ffmpeg hit {counts.decode_errors} decode error(s) reading {input_path}, so {output_path} may not "
+            "hold every recorded frame intact. Pass fail_on_frame_drop=False to accept it."
+        )
+    source_frames = decoded[0] if decoded else 0
+    if encoded != source_frames:
+        raise RuntimeError(
+            f"{output_path} has {encoded} frames but ffmpeg decoded {source_frames} from {input_path}. "
+            "h264 in AVI loses frames this way unless its timestamps are re-stamped: pass normalize_cfr=True. "
+            "Pass fail_on_frame_drop=False to accept a non-frame-exact output."
+        )
 
 
 def transcode_video(
@@ -127,7 +191,7 @@ def transcode_video(
     profile: EncodingProfile = OFFLINE_8BIT,
     auto_fix_colorspace: bool = True,
     range_override: RangeOverride | None = None,
-    normalize_cfr: bool = True,
+    normalize_cfr: bool = False,
     fail_on_frame_drop: bool = True,
     preview_fps: float | None = None,
     poster_at_seconds: float | None = None,
@@ -156,29 +220,22 @@ def transcode_video(
         sources that are TV-range encoded.  Ignored when
         ``auto_fix_colorspace=False``.
     normalize_cfr : bool
-        When ``True`` (the default), probe the source frame rate and add to the
-        profile's conditioning a ``setpts=N/(num/den)/TB`` filter that re-stamps every frame's
-        presentation timestamp from its display-order index at the source's
-        base frame rate.  This yields a clean constant-frame-rate timeline
-        starting at PTS 0 and — critically — prevents ffmpeg's implicit vsync
-        stage from silently dropping frames whose *reconstructed* timestamps
-        are non-monotonic.  That reconstruction failure is common for
-        h264-in-AVI sources (AVI cannot store composition offsets, so a
-        declared reorder/DPB delay makes the leading frames look
-        "in the past"), where the naive path drops the first several frames.
-        Assumes a constant-frame-rate source with a readable ``r_frame_rate``;
-        set to ``False`` for genuinely variable-frame-rate input whose original
-        timing must be preserved.
+        When ``True``, probe the source frame rate and add to the profile's
+        conditioning a ``setpts=N/(num/den)/TB`` filter that re-stamps every
+        frame's presentation timestamp from its display-order index at the
+        source's base frame rate, starting at PTS 0.  Legacy h264-in-AVI
+        sources need it: AVI cannot store composition offsets, so ffmpeg
+        reconstructs non-monotonic timestamps for some frames and drops them.
+        Off by default because it rewrites timing, which only sources with
+        broken timestamps call for.  Requires a readable ``r_frame_rate``; leave
+        it off for variable-frame-rate input whose timing must survive.
     fail_on_frame_drop : bool
-        When ``True`` (the default), raise :class:`RuntimeError` if ffmpeg's
-        progress stream reports any dropped or duplicated frames
-        (``drop_frames``/``dup_frames``), i.e. the output is not a frame-exact
-        copy of the decoded source.  This turns ffmpeg's silent
-        ``*** dropping frame`` warning into a hard error.  Set to ``False`` when
-        legitimately resampling variable-frame-rate input to CFR (where
-        duplicated frames are expected).  ffmpeg reports these counters for the
-        whole process rather than per output, so every derivative must keep
-        ``fps_mode="passthrough"`` for the guard to stay attributable.
+        When ``True`` (the default), raise :class:`RuntimeError` unless the
+        primary output holds exactly as many frames as ffmpeg decoded from the
+        source, with no decode errors.  Both totals come from ffmpeg's own
+        end-of-run summary, so the check needs no second decode and ignores
+        derivatives, which drop frames by design.  Set to ``False`` when
+        legitimately resampling variable-frame-rate input to CFR.
     preview_fps : float | None
         When set, emit a frame-decimated preview beside *output_path*
         (``clip.mp4`` also writes ``clip_preview.mp4``) as a second output of
@@ -211,12 +268,10 @@ def transcode_video(
     subprocess.CalledProcessError
         If ffmpeg exits with a non-zero return code.
     RuntimeError
-        If ``fail_on_frame_drop`` is set and ffmpeg dropped or duplicated
-        frames, or if ``normalize_cfr`` is set but the source has no readable
-        base frame rate.
-    ValueError
-        If ``fail_on_frame_drop`` is set alongside a derivative whose
-        ``fps_mode`` is not ``"passthrough"``.
+        If ``fail_on_frame_drop`` is set and the primary output's frame count
+        differs from the decoded source's, or ffmpeg reported decode errors or
+        no frame totals; or if ``normalize_cfr`` is set but the source has no
+        readable base frame rate.
     """
     effective = _effective_profile(
         profile,
@@ -228,20 +283,7 @@ def transcode_video(
         poster_at_seconds=poster_at_seconds,
     )
 
-    # drop_frames/dup_frames arrive on one process-wide progress stream and
-    # cannot be attributed to an output. passthrough is the only fps_mode that
-    # can never duplicate, so with every derivative pinned to it a nonzero
-    # count still indicts the primary encode.
-    unpinned = [d.suffix for d in effective.derivatives if d.fps_mode != "passthrough"]
-    if fail_on_frame_drop and unpinned:
-        raise ValueError(
-            f"derivative(s) {unpinned} set fps_mode != 'passthrough', which can duplicate frames and "
-            "trip fail_on_frame_drop on a healthy primary output, because ffmpeg reports drop/dup "
-            "counts for the whole process rather than per output. Use fps_mode='passthrough' or pass "
-            "fail_on_frame_drop=False."
-        )
-
-    cmd: list[str] = ["ffmpeg", "-progress", "pipe:1", "-nostats", "-y"]
+    cmd: list[str] = ["ffmpeg", *_FFMPEG_LOG_ARGS, "-progress", "pipe:1", "-nostats", "-y"]
     cmd.extend(http_input_flags(input_path))
     cmd.extend(effective.ffmpeg_input_args())
     cmd.extend(["-i", str(input_path)])
@@ -252,16 +294,7 @@ def transcode_video(
             cmd.append("-an")
         cmd.append(str(path))
 
-    drop_frames, dup_frames = _run_ffmpeg(cmd, on_progress=on_progress)
-
-    if fail_on_frame_drop and (drop_frames or dup_frames):
-        raise RuntimeError(
-            f"ffmpeg altered the frame stream transcoding {input_path} "
-            f"(drop_frames={drop_frames}, dup_frames={dup_frames}); {output_path} "
-            "is not a frame-exact copy of the decoded source. This usually means "
-            "the source has non-monotonic timestamps (e.g. h264-in-AVI); "
-            "normalize_cfr=True should prevent it. Pass fail_on_frame_drop=False "
-            "to allow non-frame-exact output."
-        )
-
+    counts = _run_ffmpeg(cmd, on_progress=on_progress)
+    if fail_on_frame_drop:
+        _check_frame_count(counts, input_path, output_path)
     return output_path
