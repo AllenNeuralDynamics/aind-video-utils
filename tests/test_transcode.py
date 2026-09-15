@@ -1401,7 +1401,7 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     """A 500 fps source yields a 25 fps preview whose frame k is source frame 20k.
 
     Covers the whole mechanism end-to-end: ffmpeg accepts the split graph, the
-    escaped comma in ``mod(n\\,20)`` parses, ``fps_mode=passthrough`` stops the
+    escaped comma in ``mod(n\\,20)`` parses, ``fps_mode=passthrough`` rules out a
     CFR stage duplicating the retained frames back up to 500 fps, and the frame
     check reads the archive's totals rather than the preview's.
     """

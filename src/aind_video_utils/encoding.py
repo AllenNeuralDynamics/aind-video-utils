@@ -170,8 +170,10 @@ class Derivative:
     fps_mode : {"passthrough", "cfr", "vfr"}
         Value for ``-fps_mode``.  Leave it at ``"passthrough"`` for any
         frame-dropping derivative: ``select`` and friends drop frames without
-        updating the filter link's advertised frame rate, so ffmpeg's default
-        CFR stage duplicates every retained frame back up to the source rate.
+        updating the filter link's advertised frame rate, so a constant-frame-rate
+        stage -- which ffmpeg's default picks for muxers that cannot store
+        variable timing -- duplicates every retained frame back up to the source
+        rate.
     tap : {"shared", "source"}
         Where this derivative branches from.  ``"shared"`` (the default) takes
         the output of :attr:`EncodingProfile.video_filters`, so the derivative
