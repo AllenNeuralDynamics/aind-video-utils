@@ -668,8 +668,7 @@ def with_preview(
     suffix : str
         Stem suffix for the preview file.
     crf : int
-        x264 quality for the preview.  Decimation dominates the size and
-        streamability, so this is not a sensitive knob.
+        x264 quality for the preview, which trades directly against its size.
     x264_preset : str
         x264 speed preset.  Kept fast because two encoders share the machine
         with the archival encode, whose throughput is what actually matters.
