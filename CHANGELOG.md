@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.7.0 (2026-09-16)
+
+### BREAKING CHANGE
+
+- transcode_video no longer re-stamps timestamps by
+default. h264-in-AVI sources now fail the frame check unless called with
+normalize_cfr=True (--normalize_cfr true on the CLI).
+
+### Feat
+
+- **encoding**: default the preview to CRF 27
+- **encoding**: default the preview to -preset medium
+- add preview and poster derivatives to encoding profiles
+
+### Fix
+
+- **encoding**: give ONLINE_10BIT the input tags ONLINE_8BIT has
+- **encoding**: give OFFLINE_10BIT the same chain as OFFLINE_8BIT
+- **transcode**: make CFR re-stamping opt-in and verify frame counts
+- **encoding**: encode offline profiles with -preset slow
+
+### Refactor
+
+- **encoding**: set OFFLINE_8BIT's final dither to bayer
+
 ## v0.6.3 (2026-07-23)
 
 ### Fix
