@@ -457,9 +457,11 @@ ONLINE_8BIT = EncodingProfile(
 )
 
 ONLINE_10BIT = EncodingProfile(
+    # format= after scale, not before: first, it converts to limited range and
+    # drops levels; absent, gray reaches p010le with near-zero chroma.
     video_filters=(
-        "format=yuv420p10le,"
         "scale=out_range=full,"
+        "format=yuv420p10le,"
         "setparams=range=full:colorspace=bt709:color_primaries=bt709:color_trc=linear"
     ),
     codec="hevc_nvenc",

@@ -222,8 +222,8 @@ def test_online_10bit_output_args():
     args = ONLINE_10BIT.ffmpeg_output_args()
     assert args == [
         "-vf",
-        "format=yuv420p10le,"
         "scale=out_range=full,"
+        "format=yuv420p10le,"
         "setparams=range=full:colorspace=bt709:color_primaries=bt709:color_trc=linear",
         "-c:v",
         "hevc_nvenc",
@@ -276,6 +276,44 @@ def test_online_10bit_input_args():
 
 def test_online_10bit_container():
     assert ONLINE_10BIT.container == "mkv"
+
+
+@ffmpeg_required
+def test_online_10bit_filters_keep_every_level_of_gray16(tmp_path):
+    # Runs the filters without NVENC, into the p010le the encoder takes.
+    width = 4096
+    ramp = np.tile(np.arange(0, 65536, 65536 // width, dtype="<u2"), (2, 1))
+    src = tmp_path / "ramp.gray16"
+    src.write_bytes(ramp.tobytes())
+    out = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            *ONLINE_10BIT.ffmpeg_input_args(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray16le",
+            "-s",
+            f"{width}x2",
+            "-i",
+            str(src),
+            "-vf",
+            ONLINE_10BIT.video_filters,
+            "-pix_fmt",
+            "p010le",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    planes = np.frombuffer(out, dtype="<u2") >> 6
+    luma, chroma = planes[: 2 * width], planes[2 * width :]
+    assert len(np.unique(luma)) == 1024
+    assert set(chroma.tolist()) == {512}
 
 
 # ---------------------------------------------------------------------------
