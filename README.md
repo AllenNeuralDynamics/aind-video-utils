@@ -237,23 +237,9 @@ fig = compare_linear_to_bt709("input.mp4", "output.mp4", frame_time=0)
 fig.savefig("qc.png")
 ```
 
-## Development
-
-```bash
-uv sync                              # install all dev dependencies
-./scripts/run_linters_and_checks.sh -c  # run full lint + test suite
-```
-
 ## Contributing
 
-We use [Conventional Commits](https://www.conventionalcommits.org/):
-```text
-<type>(<scope>): <short summary>
-```
-
-Types: **feat**, **fix**, **docs**, **ci**, **build**, **perf**, **refactor**, **test**
-
-For internal members, please create a branch. For external members, please fork the repository and open a pull request from the fork.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and conventions.
 
 ## License
 
