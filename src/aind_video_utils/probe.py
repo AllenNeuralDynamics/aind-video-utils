@@ -14,13 +14,17 @@ from aind_video_utils.utils import http_input_flags
 ProbeDict = dict[str, Any]
 
 
-def probe(video_path: str | Path) -> ProbeDict:
+def probe(video_path: str | Path, *, count_packets: bool = False) -> ProbeDict:
     """Run ffprobe on a video file and return the parsed JSON output.
 
     Parameters
     ----------
     video_path : str | Path
         Path to the video file.
+    count_packets : bool
+        Also count each stream's packets into ``nb_read_packets``.  This reads
+        the whole file, though it decodes nothing; Matroska records no
+        ``nb_frames``, so it is the only exact frame count such a file has.
 
     Returns
     -------
@@ -35,6 +39,7 @@ def probe(video_path: str | Path) -> ProbeDict:
         "json",
         "-show_format",
         "-show_streams",
+        *(["-count_packets"] if count_packets else []),
         *http_input_flags(video_path),
         str(video_path),
     ]
@@ -182,8 +187,8 @@ def get_color_transfer(probe_json: ProbeDict) -> str | None:
 def get_duration_seconds(probe_json: ProbeDict) -> float | None:
     """Return the first video stream's duration in seconds.
 
-    Tries the stream's ``duration`` field directly; falls back to
-    ``nb_frames / r_frame_rate`` when only the frame count is known.
+    Tries the stream's ``duration`` field, then ``nb_frames / r_frame_rate``,
+    then the container's duration, which is the only one Matroska records.
 
     Parameters
     ----------
@@ -209,6 +214,12 @@ def get_duration_seconds(probe_json: ProbeDict) -> float | None:
             fps = int(num) / int(den)
             return int(nb) / fps
         except (ValueError, ZeroDivisionError):
+            pass
+    container = probe_json.get("format", {}).get("duration")
+    if container is not None and container != "N/A":
+        try:
+            return float(container)
+        except ValueError:
             pass
     return None
 
@@ -244,6 +255,31 @@ def get_r_frame_rate(probe_json: ProbeDict) -> tuple[int, int] | None:
     if num <= 0 or den <= 0:
         return None
     return num, den
+
+
+def get_exact_nb_frames(probe_json: ProbeDict) -> int | None:
+    """Return the first video stream's frame count, or ``None`` if none is recorded.
+
+    Reads ``nb_frames``, then the ``nb_read_packets`` that
+    ``probe(..., count_packets=True)`` adds, and never estimates one from the
+    duration as :func:`get_nb_frames` does.
+
+    Parameters
+    ----------
+    probe_json : ProbeDict
+        Parsed ffprobe output.
+
+    Returns
+    -------
+    int | None
+        Exact frame count, or ``None`` when the probe holds none.
+    """
+    stream = probe_json["streams"][0]
+    for key in ("nb_frames", "nb_read_packets"):
+        raw = stream.get(key)
+        if raw is not None and raw != "N/A":
+            return int(raw)
+    return None
 
 
 def get_nb_frames(probe_json: ProbeDict) -> int | None:

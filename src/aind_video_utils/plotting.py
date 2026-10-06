@@ -358,7 +358,7 @@ def intensity_histogram(  # noqa: C901
     # Set up axes
     if ax is None:
         figsize = (8, 3) if orientation == "horizontal" else (3, 8)
-        fig, ax = plt.subplots(figsize=figsize)
+        _fig, ax = plt.subplots(figsize=figsize)
     else:
         _ = ax.figure
 
@@ -568,7 +568,7 @@ def bivariate_intensity_histogram(
     output_flat = np.asarray(output_image).ravel()
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(5, 5))
+        _fig, ax = plt.subplots(figsize=(5, 5))
 
     _apply_tufte_style(ax)
 
@@ -703,7 +703,6 @@ def bivariate_with_marginals(
     x_arr = np.asarray(x_data)
     y_arr = np.asarray(y_data)
 
-    lo, hi = intensity_range
     if x_clip is None:
         x_clip = x_limits if x_limits is not None else intensity_range
     if y_clip is None:

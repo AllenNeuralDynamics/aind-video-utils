@@ -13,16 +13,19 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
     EncodingProfile,
     RangeOverride,
+    preview_decimation,
     with_poster,
     with_preview,
     with_setparams,
 )
-from aind_video_utils.probe import get_r_frame_rate, probe
+from aind_video_utils.preview_metadata import PREVIEW_METADATA_FILENAME, read_frame_metadata, write_decimated
+from aind_video_utils.probe import get_duration_seconds, get_exact_nb_frames, get_r_frame_rate, probe
 from aind_video_utils.utils import http_input_flags
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
@@ -49,6 +52,18 @@ _PROBLEM_RE = re.compile(rb"\[(?:warning|error|fatal|panic)\]")
 _STDERR_TAIL_LINES = 200
 
 
+class FfmpegError(subprocess.CalledProcessError):
+    """ffmpeg exited non-zero; the message carries its warning and error lines.
+
+    ``CalledProcessError`` prints only the exit status, which hides why ffmpeg
+    failed from a traceback.  ``stderr`` holds the same lines as bytes.
+    """
+
+    def __str__(self) -> str:
+        detail = self.stderr.decode(errors="replace").rstrip() if self.stderr else ""
+        return f"{super().__str__()}\n{detail}" if detail else super().__str__()
+
+
 @dataclass
 class _FrameCounts:
     """Video frame totals from ffmpeg's end-of-run summary.
@@ -70,17 +85,26 @@ def _effective_profile(
     range_override: RangeOverride | None,
     normalize_cfr: bool,
     preview_fps: float | None,
+    poster: bool,
     poster_at_seconds: float | None,
-) -> EncodingProfile:
+    count_frames: bool,
+) -> tuple[EncodingProfile, int | None]:
     """Apply the probe-driven adjustments to *profile*.
 
     Prepends the per-source ``setparams`` colour clause (when
     ``auto_fix_colorspace``) and the CFR-normalizing ``setpts`` clause (when
     ``normalize_cfr``), then appends the preview and poster derivatives (when
-    ``preview_fps`` / ``poster_at_seconds``).  Probes the source at most once.
+    ``preview_fps`` / ``poster``).  Probes the source once, and a second time
+    to count packets only when the poster needs the middle frame of a source
+    that records no frame count and either ``count_frames`` asks for the exact
+    one or the source records no duration to estimate it from.
+
+    Returns the profile and the preview's decimation factor, ``None`` without
+    a preview.
     """
     effective = profile
-    needs_probe = auto_fix_colorspace or normalize_cfr or preview_fps is not None or poster_at_seconds is not None
+    poster = poster or poster_at_seconds is not None
+    needs_probe = auto_fix_colorspace or normalize_cfr or preview_fps is not None or poster
     probe_json = probe(input_path) if needs_probe else None
     if auto_fix_colorspace:
         assert probe_json is not None
@@ -96,13 +120,50 @@ def _effective_profile(
         num, den = rate
         setpts = f"setpts=N/({num}/{den})/TB"
         effective = effective.prepend_conditioning(setpts)
+    factor = None
     if preview_fps is not None:
         assert probe_json is not None
-        effective = with_preview(effective, probe_json, target_fps=preview_fps)
-    if poster_at_seconds is not None:
+        factor, _ = preview_decimation(probe_json, target_fps=preview_fps)
+        # The same factor thins the preview and preview_metadata.parquet, so their rows cannot drift apart.
+        effective = with_preview(effective, probe_json, factor=factor)
+    if poster:
         assert probe_json is not None
+        if (
+            poster_at_seconds is None
+            and get_exact_nb_frames(probe_json) is None
+            and (count_frames or get_duration_seconds(probe_json) is None)
+        ):
+            probe_json = probe(input_path, count_packets=True)
         effective = with_poster(effective, probe_json, at_seconds=poster_at_seconds)
-    return effective
+    return effective, factor
+
+
+def _check_derivatives_written(counts: _FrameCounts, paths: list[Path]) -> None:
+    """Raise if ffmpeg encoded no frame for a derivative, which some ffmpeg versions do without failing."""
+    for index, path in enumerate(paths, 1):
+        if counts.encoded.get(index) == 0:
+            raise RuntimeError(
+                f"ffmpeg wrote no frames to {path}: its frames lie past the end of the source. A poster placed from "
+                "a duration that overstates the source does this; pass count_frames=True to place it exactly."
+            )
+
+
+def _check_metadata_rows(frame_metadata: Any, counts: _FrameCounts, metadata_csv: Path, output_path: Path) -> None:
+    """Raise unless *metadata_csv* has one row per frame of *output_path*.
+
+    Without that, row ``k * N`` of the decimated table does not describe preview
+    frame ``k``.
+    """
+    encoded = counts.encoded.get(0)
+    if encoded is None:
+        raise RuntimeError(
+            f"ffmpeg reported no frame total for {output_path}, so {metadata_csv} cannot be matched to its frames."
+        )
+    if frame_metadata.num_rows != encoded:
+        raise RuntimeError(
+            f"{metadata_csv} has {frame_metadata.num_rows} rows but {output_path} has {encoded} frames, so "
+            f"{PREVIEW_METADATA_FILENAME} would not line up with the preview; it was not written."
+        )
 
 
 def _read_stderr(stream: Iterable[bytes], counts: _FrameCounts, problems: deque[bytes]) -> None:
@@ -126,9 +187,10 @@ def _run_ffmpeg(cmd: list[str], *, on_progress: Callable[[int], None] | None) ->
 
     Raises
     ------
-    subprocess.CalledProcessError
-        If ffmpeg exits with a non-zero return code.  Its ``stderr`` carries the
-        last warning and error lines rather than the verbose log.
+    FfmpegError
+        If ffmpeg exits with a non-zero return code.  Its message and
+        ``stderr`` carry the last warning and error lines rather than the
+        verbose log.
     """
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert proc.stdout is not None and proc.stderr is not None
@@ -147,7 +209,7 @@ def _run_ffmpeg(cmd: list[str], *, on_progress: Callable[[int], None] | None) ->
     reader.join()
 
     if returncode != 0:
-        raise subprocess.CalledProcessError(returncode, cmd, stderr=b"".join(problems))
+        raise FfmpegError(returncode, cmd, stderr=b"".join(problems))
     return counts
 
 
@@ -194,7 +256,10 @@ def transcode_video(
     normalize_cfr: bool = False,
     fail_on_frame_drop: bool = True,
     preview_fps: float | None = None,
+    metadata_csv: Path | None = None,
+    poster: bool = False,
     poster_at_seconds: float | None = None,
+    count_frames: bool = False,
     no_audio: bool = True,
     on_progress: Callable[[int], None] | None = None,
 ) -> Path:
@@ -237,18 +302,37 @@ def transcode_video(
         derivatives, which drop frames by design.  Set to ``False`` when
         legitimately resampling variable-frame-rate input to CFR.
     preview_fps : float | None
-        When set, emit a frame-decimated preview beside *output_path*
-        (``clip.mp4`` also writes ``clip_preview.mp4``) as a second output of
-        the same ffmpeg process, sharing the decode and the colour chain.  The
-        value is a target rather than an exact rate: the decimation factor is
-        ``round(source_fps / preview_fps)``, so every preview frame is a real
-        source frame.  See :func:`aind_video_utils.encoding.with_preview`.
-    poster_at_seconds : float | None
-        When set, also write a JPEG still this far into the video
-        (``clip.mp4`` also writes ``clip_poster.jpg``), branched off the
-        conditioned source and encoded as sRGB so it matches what a browser
-        shows for the video beside it.  See
+        When set, also write ``preview.mp4`` beside *output_path*, a
+        frame-decimated preview encoded as a second output of the same ffmpeg
+        process, sharing the decode and the colour chain.  The value is a
+        target rather than an exact rate: the integer decimation factor comes
+        from :func:`aind_video_utils.encoding.preview_decimation`, so every
+        preview frame is a real source frame.  See
+        :func:`aind_video_utils.encoding.with_preview`.
+    metadata_csv : Path | None
+        The camera's ``metadata.csv``.  With ``preview_fps`` set, its
+        ``ReferenceTime`` column, decimated as the preview is, is written to
+        ``preview_metadata.parquet`` beside *output_path*, which the spec
+        requires of every preview.  It is read before encoding, so a missing
+        file, column or the ``parquet`` extra fails fast.  See
+        :mod:`aind_video_utils.preview_metadata`.
+    poster : bool
+        When ``True``, also write ``poster.jpg`` beside *output_path*: the
+        middle frame, branched off the conditioned source and encoded as sRGB
+        so it matches what a browser shows for the video beside it.  Where the
+        container records no frame count, as Matroska does not, the middle is
+        estimated from the duration.  See
         :func:`aind_video_utils.encoding.with_poster`.
+    poster_at_seconds : float | None
+        When set, write the poster from this time into the video instead of
+        the middle frame.  Implies ``poster``.
+    count_frames : bool
+        When ``True``, place the poster on the exact middle frame of a source
+        that records no frame count by counting its packets first, which reads
+        the whole source once more without decoding it -- a second download
+        for a URL.  Without it, packets are counted only when the source
+        records no duration either, as a recording that was killed mid-write
+        does not.
     no_audio : bool
         If ``True``, strip audio (``-an``).
     on_progress : Callable[[int], None] | None
@@ -265,22 +349,37 @@ def transcode_video(
 
     Raises
     ------
-    subprocess.CalledProcessError
-        If ffmpeg exits with a non-zero return code.
+    FfmpegError
+        If ffmpeg exits with a non-zero return code, its warning and error
+        lines in the message.  A subclass of ``subprocess.CalledProcessError``.
+        ffmpeg 8.1 fails this way when a poster estimated from the
+        duration lies past the end of a truncated source.
     RuntimeError
         If ``fail_on_frame_drop`` is set and the primary output's frame count
         differs from the decoded source's, or ffmpeg reported decode errors or
-        no frame totals; or if ``normalize_cfr`` is set but the source has no
-        readable base frame rate.
+        no frame totals; if ``normalize_cfr`` is set but the source has no
+        readable base frame rate; if ``metadata_csv`` has a row count other
+        than the primary output's frame count; or if ffmpeg exited zero
+        without writing a frame to a derivative.
+    ValueError
+        If ``metadata_csv`` is given without ``preview_fps``, or lacks the
+        ``ReferenceTime`` column.
+    ImportError
+        If ``metadata_csv`` is given without the ``parquet`` extra installed.
     """
-    effective = _effective_profile(
+    if metadata_csv is not None and preview_fps is None:
+        raise ValueError("metadata_csv describes a preview's frames, so it needs preview_fps")
+    frame_metadata = read_frame_metadata(metadata_csv) if metadata_csv is not None else None
+    effective, factor = _effective_profile(
         profile,
         input_path,
         auto_fix_colorspace=auto_fix_colorspace,
         range_override=range_override,
         normalize_cfr=normalize_cfr,
         preview_fps=preview_fps,
+        poster=poster,
         poster_at_seconds=poster_at_seconds,
+        count_frames=count_frames,
     )
 
     cmd: list[str] = ["ffmpeg", *_FFMPEG_LOG_ARGS, "-progress", "pipe:1", "-nostats", "-y"]
@@ -297,4 +396,9 @@ def transcode_video(
     counts = _run_ffmpeg(cmd, on_progress=on_progress)
     if fail_on_frame_drop:
         _check_frame_count(counts, input_path, output_path)
+    _check_derivatives_written(counts, effective.output_paths(output_path)[1:])
+    if frame_metadata is not None:
+        assert metadata_csv is not None and factor is not None
+        _check_metadata_rows(frame_metadata, counts, metadata_csv, output_path)
+        write_decimated(frame_metadata, output_path.with_name(PREVIEW_METADATA_FILENAME), factor)
     return output_path

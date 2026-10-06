@@ -27,17 +27,24 @@ from aind_video_utils.probe import (
     get_color_range,
     get_color_space,
     get_color_transfer,
-    get_nb_frames,
+    get_duration_seconds,
+    get_exact_nb_frames,
     get_r_frame_rate,
     get_yuv_format,
 )
 
 RangeOverride = Literal["pc", "tv"]
 
-SPEC_VERSION: str = "0.3.0"
+SPEC_VERSION: str = "0.4.1"
 """Version of the aind-file-standards behavior video spec these profiles
 implement, matching the ``## Version`` heading of that document.  Independent
 of this package's own version."""
+
+PREVIEW_FILENAME = "preview.mp4"
+"""The spec's name for a preview, beside the primary video."""
+
+POSTER_FILENAME = "poster.jpg"
+"""The spec's name for a poster image, beside the primary video."""
 
 # ---------------------------------------------------------------------------
 # Setparams filter — fill missing color metadata only
@@ -135,7 +142,7 @@ def _codec_args(
     return args
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Derivative:
     """A secondary output encoded from a branch of a profile's shared chain.
 
@@ -146,9 +153,12 @@ class Derivative:
 
     Parameters
     ----------
+    filename : str | None
+        Fixed name for this output in the primary output's directory, such as
+        the spec's ``"preview.mp4"``.  Takes precedence over ``suffix``.
     suffix : str
-        Appended to the primary output's stem, so ``"_preview"`` turns
-        ``clip.mp4`` into ``clip_preview.mp4``.
+        Appended to the primary output's stem when ``filename`` is ``None``,
+        so ``"_preview"`` turns ``clip.mp4`` into ``clip_preview.mp4``.
     codec : str
         Value for ``-c:v``.
     pixel_format : str
@@ -198,7 +208,8 @@ class Derivative:
         re-deriving the shared work costs almost nothing.
     """
 
-    suffix: str
+    filename: str | None = None
+    suffix: str = ""
     codec: str
     pixel_format: str
     container: str
@@ -209,9 +220,19 @@ class Derivative:
     fps_mode: Literal["passthrough", "cfr", "vfr"] = "passthrough"
     tap: Literal["shared", "source"] = "shared"
 
+    def __post_init__(self) -> None:
+        if not self.filename and not self.suffix:
+            raise ValueError("a Derivative needs a filename or a suffix, or it would overwrite the primary output.")
+
     def output_path_for(self, primary: Path) -> Path:
         """Return this derivative's path alongside the *primary* output."""
+        if self.filename:
+            return primary.with_name(self.filename)
         return primary.with_name(f"{primary.stem}{self.suffix}.{self.container}")
+
+    def _name_key(self) -> tuple[str, ...]:
+        """Identify the path this derivative writes, independent of the primary's name."""
+        return (self.filename,) if self.filename else (self.suffix, self.container)
 
     def ffmpeg_codec_args(self) -> list[str]:
         """Return this derivative's arguments between its ``-map`` and its path."""
@@ -457,9 +478,11 @@ ONLINE_8BIT = EncodingProfile(
 )
 
 ONLINE_10BIT = EncodingProfile(
+    # format= after scale, not before: first, it converts to limited range and
+    # drops levels; absent, gray reaches p010le with near-zero chroma.
     video_filters=(
-        "format=yuv420p10le,"
         "scale=out_range=full,"
+        "format=yuv420p10le,"
         "setparams=range=full:colorspace=bt709:color_primaries=bt709:color_trc=linear"
     ),
     codec="hevc_nvenc",
@@ -621,12 +644,23 @@ def preview_decimation(
     return factor, source / factor
 
 
+def _append_derivative(profile: EncodingProfile, derivative: Derivative) -> EncodingProfile:
+    """Return *profile* with *derivative* appended, refusing one that would share another's path."""
+    if any(d._name_key() == derivative._name_key() for d in profile.derivatives):
+        raise ValueError(
+            f"profile already has a derivative named like {derivative._name_key()}; both would write the same path."
+        )
+    return profile.replace(derivatives=(*profile.derivatives, derivative))
+
+
 def with_preview(
     profile: EncodingProfile,
     probe_json: ProbeDict,
     *,
     target_fps: float = 30.0,
     fps_band: tuple[float, float] = (25.0, 35.0),
+    factor: int | None = None,
+    filename: str | None = PREVIEW_FILENAME,
     suffix: str = "_preview",
     crf: int = 27,
     x264_preset: str = "medium",
@@ -665,8 +699,16 @@ def with_preview(
     fps_band : tuple[float, float]
         Inclusive bounds on the preview rate.  See :func:`preview_decimation`
         for how the two interact and why the band is a hard constraint.
+    factor : int | None
+        Decimation factor to use instead of choosing one from ``target_fps``
+        and ``fps_band``, which are then ignored.  Pass the factor that
+        thins anything else describing the preview's frames, such as
+        ``preview_metadata.parquet``, so the two cannot disagree.
+    filename : str | None
+        Name of the preview file beside the primary output.  ``None`` names it
+        from the primary's stem and ``suffix`` instead.
     suffix : str
-        Stem suffix for the preview file.
+        Stem suffix for the preview file when ``filename`` is ``None``.
     crf : int
         x264 quality for the preview, which trades directly against its size.
     x264_preset : str
@@ -681,18 +723,29 @@ def with_preview(
     Raises
     ------
     RuntimeError
-        If the source has no readable ``r_frame_rate`` to size the factor from.
+        If the source has no readable ``r_frame_rate``, which sizes both the
+        factor and the keyframe interval.
     ValueError
-        If *profile* already has a derivative using ``suffix`` (both would write
-        the same path), or if ``target_fps`` and ``fps_band`` are inconsistent.
+        If *profile* already has a derivative with the same name (both would
+        write the same path), if ``factor`` is less than 1, or if
+        ``target_fps`` and ``fps_band`` are inconsistent.
     """
-    if any(d.suffix == suffix for d in profile.derivatives):
-        raise ValueError(f"profile already has a derivative with suffix {suffix!r}; both would write the same path.")
-    factor, preview_fps = preview_decimation(probe_json, target_fps=target_fps, fps_band=fps_band)
+    if factor is None:
+        factor, preview_fps = preview_decimation(probe_json, target_fps=target_fps, fps_band=fps_band)
+    else:
+        if factor < 1:
+            raise ValueError(f"factor must be at least 1, got {factor}")
+        rate = get_r_frame_rate(probe_json)
+        if rate is None:
+            raise RuntimeError(
+                "with_preview needs a readable r_frame_rate to set the keyframe interval, and the source reports none."
+            )
+        preview_fps = Fraction(*rate) / factor
     # factor == 1 means the source is already at or below the band; an empty
     # chain is clearer than a select that keeps every frame.
     filters = f"select=not(mod(n\\,{factor}))" if factor > 1 else ""
     derivative = Derivative(
+        filename=filename,
         suffix=suffix,
         codec="libx264",
         pixel_format="yuv420p",
@@ -705,21 +758,26 @@ def with_preview(
         output_flags=("-movflags", "+faststart+write_colr"),
         metadata=profile.metadata,
     )
-    return profile.replace(derivatives=(*profile.derivatives, derivative))
+    return _append_derivative(profile, derivative)
 
 
 def with_poster(
     profile: EncodingProfile,
     probe_json: ProbeDict,
     *,
-    at_seconds: float = 1.0,
+    frame: int | None = None,
+    at_seconds: float | None = None,
+    filename: str | None = POSTER_FILENAME,
     suffix: str = "_poster",
     quality: int = 3,
 ) -> EncodingProfile:
     """Append a JPEG still branched off the conditioned source.
 
     A poster gives QC pages, dashboards and ``<video poster=...>`` a cheap
-    thumbnail without every viewer decoding the video to show one image.
+    thumbnail without every viewer decoding the video to show one image.  By
+    default it shows frame ``nb_frames // 2``, as the spec recommends, or
+    estimates that frame from the duration when the probe holds no exact
+    frame count.
 
     The still taps the source rather than the shared chain because JFIF carries
     no colour tags and every viewer reads a JPEG as sRGB, while the archive is
@@ -740,14 +798,21 @@ def with_poster(
     profile : EncodingProfile
         Base profile.
     probe_json : ProbeDict
-        Probe result for the source, read for ``r_frame_rate`` and the frame
-        count.
-    at_seconds : float
-        How far into the video to sample.  Sampling a little way in beats the
-        first frame, which can be blank or dark.  The frame index is
-        clamped to the last frame when the probe reports a count.
+        Probe result for the source.  The middle frame comes from an exact
+        count -- ``nb_frames``, or for Matroska, which records none, the
+        ``nb_read_packets`` that ``probe(..., count_packets=True)`` adds -- and
+        otherwise from the duration and ``r_frame_rate``.  A duration can
+        overstate a truncated file, putting the estimate past its end.
+    frame : int | None
+        Source frame to show, counted from 0.  Overrides the middle frame.
+    at_seconds : float | None
+        Time into the video to show instead, clamped to the last frame when
+        the frame count is known.  Mutually exclusive with ``frame``.
+    filename : str | None
+        Name of the still beside the primary output.  ``None`` names it from
+        the primary's stem and ``suffix`` instead.
     suffix : str
-        Stem suffix for the still.
+        Stem suffix for the still when ``filename`` is ``None``.
     quality : int
         Value for ``-q:v``; 2 is best, 31 worst.
 
@@ -759,36 +824,54 @@ def with_poster(
     Raises
     ------
     RuntimeError
-        If the source has no readable ``r_frame_rate``.
+        If the probe lacks what the chosen frame needs: a frame count or a
+        duration and ``r_frame_rate`` for the middle frame, or ``r_frame_rate``
+        for ``at_seconds``.
     ValueError
-        If ``at_seconds`` is negative, or *profile* already has a derivative
-        using ``suffix``.
+        If ``frame`` and ``at_seconds`` are both set, either is negative, or
+        *profile* already has a derivative with the same name.
 
     Notes
     -----
-    When the probe reports no frame count and the video is shorter than
-    ``at_seconds``, ``select`` matches nothing: ffmpeg writes no still and still
-    exits zero, so the absence is silent.
+    A frame past the end -- an explicit one, or one estimated from a duration
+    or ``at_seconds`` without a frame count to clamp it -- makes ``select``
+    match nothing.  ffmpeg 8.1 then exits non-zero, though the primary file it
+    wrote is complete; a version that instead writes no still and exits zero
+    is caught by :func:`aind_video_utils.transcode.transcode_video`.
 
     The still carries no ``-metadata``, since ffmpeg writes none of it into a
     JPEG.
     """
-    if at_seconds < 0:
+    if frame is not None and at_seconds is not None:
+        raise ValueError("pass frame or at_seconds, not both")
+    if frame is not None and frame < 0:
+        raise ValueError(f"frame must not be negative, got {frame}")
+    if at_seconds is not None and at_seconds < 0:
         raise ValueError(f"at_seconds must not be negative, got {at_seconds}")
-    if any(d.suffix == suffix for d in profile.derivatives):
-        raise ValueError(f"profile already has a derivative with suffix {suffix!r}; both would write the same path.")
-    rate = get_r_frame_rate(probe_json)
-    if rate is None:
-        raise RuntimeError(
-            "with_poster needs a readable r_frame_rate to turn at_seconds into a frame index, "
-            "and the source reports none."
-        )
-    num, den = rate
-    frame = round(at_seconds * num / den)
-    total = get_nb_frames(probe_json)
-    if total is not None and total > 0:
-        frame = min(frame, total - 1)
+    if frame is None:
+        total = get_exact_nb_frames(probe_json)
+        rate = get_r_frame_rate(probe_json)
+        if at_seconds is None and total is not None:
+            frame = total // 2
+        elif at_seconds is None:
+            duration = get_duration_seconds(probe_json)
+            if duration is None or rate is None:
+                raise RuntimeError(
+                    "with_poster needs a frame count, or a duration and r_frame_rate, to find the middle frame, "
+                    "and the probe has neither; probe with count_packets=True, or pass frame=."
+                )
+            frame = math.floor(duration * rate[0] / rate[1]) // 2
+        else:
+            if rate is None:
+                raise RuntimeError(
+                    "with_poster needs a readable r_frame_rate to turn at_seconds into a frame index, "
+                    "and the source reports none."
+                )
+            frame = round(at_seconds * rate[0] / rate[1])
+            if total is not None and total > 0:
+                frame = min(frame, total - 1)
     derivative = Derivative(
+        filename=filename,
         suffix=suffix,
         codec="mjpeg",
         pixel_format="yuvj420p",
@@ -808,4 +891,4 @@ def with_poster(
         # rather than a malformed sequence pattern.
         output_flags=("-frames:v", "1", "-update", "1"),
     )
-    return profile.replace(derivatives=(*profile.derivatives, derivative))
+    return _append_derivative(profile, derivative)
