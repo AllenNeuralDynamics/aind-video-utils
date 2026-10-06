@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pyarrow.parquet as pq
 import pytest
+
+pq = pytest.importorskip("pyarrow.parquet")
 
 from aind_video_utils import transcode as transcode_mod
 from aind_video_utils.preview_metadata import write_preview_metadata

@@ -11,7 +11,6 @@ from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
-import pyarrow.parquet as pq
 import pytest
 
 from aind_video_utils import transcode as transcode_mod
@@ -1556,6 +1555,7 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     CFR stage duplicating the retained frames back up to 500 fps, and the frame
     check reads the archive's totals rather than the preview's.
     """
+    pq = pytest.importorskip("pyarrow.parquet")
     src = tmp_path / "src.avi"
     dst = tmp_path / "out.mp4"
     preview = tmp_path / "preview.mp4"

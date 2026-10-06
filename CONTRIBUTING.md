@@ -28,8 +28,10 @@ wheel without extras. The script covers neither, so check them before pushing:
 uv run --python 3.10 --isolated --with mypy --with pyarrow --with pydantic-settings --with rich \
   --with matplotlib --with opencv-python-headless mypy
 
-# the core imports without any optional dependency
-uv build --wheel -o dist && uv run --isolated --no-project --with dist/*.whl python -c "import aind_video_utils"
+# the tests pass against the wheel without any optional dependency, run outside the
+# repository so they import the installed wheel and not src/
+rm -rf dist && uv build --wheel -o dist && wheel=$(echo "$PWD"/dist/*.whl) && tmp=$(mktemp -d) && cp -r tests "$tmp" \
+  && (cd "$tmp" && uv run --isolated --no-project --with "$wheel" --with pytest pytest -q)
 ```
 
 ## Design
