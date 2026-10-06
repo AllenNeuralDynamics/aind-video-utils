@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-pq = pytest.importorskip("pyarrow.parquet")
-
 from aind_video_utils import transcode as transcode_mod
 from aind_video_utils.preview_metadata import write_preview_metadata
 from aind_video_utils.transcode import transcode_video
+
+pq = pytest.importorskip("pyarrow.parquet")
 
 
 def _metadata_csv(path: Path, n_frames: int) -> Path:
