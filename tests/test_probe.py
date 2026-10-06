@@ -56,3 +56,11 @@ def test_get_nb_frames_from_duration_fractional():
 def test_get_nb_frames_unavailable():
     probe_json = {"streams": [{"pix_fmt": "yuv420p"}]}
     assert get_nb_frames(probe_json) is None
+
+
+def test_duration_falls_back_to_the_container():
+    """Matroska records no stream duration, only the segment's."""
+    from aind_video_utils.probe import get_duration_seconds
+
+    assert get_duration_seconds({"streams": [{"duration": "N/A"}], "format": {"duration": "2.5"}}) == 2.5
+    assert get_duration_seconds({"streams": [{}]}) is None

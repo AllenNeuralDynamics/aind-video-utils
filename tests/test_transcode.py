@@ -11,6 +11,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from aind_video_utils import transcode as transcode_mod
@@ -43,7 +44,7 @@ ffmpeg_required = pytest.mark.skipif(
 
 def test_spec_version_is_string():
     assert isinstance(SPEC_VERSION, str)
-    assert SPEC_VERSION == "0.3.0"
+    assert SPEC_VERSION == "0.4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -773,6 +774,22 @@ def test_frame_exact_output_does_not_raise(monkeypatch, tmp_path):
     assert out == tmp_path / "out.mp4"
 
 
+def test_ffmpeg_failure_message_shows_ffmpegs_error(monkeypatch, tmp_path):
+    """A traceback must say why ffmpeg failed, not only its exit status."""
+    log = b"[out#1/image2 @ 0x1] [error] Nothing was written into output file\n"
+    _patch_ffmpeg(monkeypatch, stdout_bytes=b"", stderr_bytes=log, returncode=234)
+    with pytest.raises(subprocess.CalledProcessError, match="Nothing was written into output file"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4")
+
+
+def test_empty_derivative_is_an_error_when_ffmpeg_exits_zero(monkeypatch, tmp_path):
+    stderr = _summary(100, 100, 0)
+    profile = OFFLINE_8BIT.replace(derivatives=(_dummy_derivative(),))
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=stderr, rate="500/1")
+    with pytest.raises(RuntimeError, match="wrote no frames"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", profile=profile)
+
+
 def test_ffmpeg_failure_reports_warnings_and_errors_only(monkeypatch, tmp_path):
     log = (
         b"[info] Stream mapping:\n"
@@ -1149,9 +1166,9 @@ def test_archive_preview_and_poster_from_one_invocation(tmp_path: Path) -> None:
     dst = tmp_path / "v.mp4"
     # One invocation, three outputs: archive, decimated preview, sRGB still.
     assert transcode_video(src, dst, profile=profile, preview_fps=30.0, poster_at_seconds=0.1) == dst
-    assert (tmp_path / "v_preview.mp4").exists()
+    assert (tmp_path / "preview.mp4").exists()
 
-    jpg = dst.with_name("v_poster.jpg")
+    jpg = dst.with_name("poster.jpg")
     assert jpg.exists()
     gray = tmp_path / "poster.gray"
     subprocess.run(
@@ -1304,6 +1321,44 @@ def test_with_preview_appends_to_existing_derivatives():
     assert [d.suffix for d in grown.derivatives] == ["_other", "_preview"]
 
 
+def test_with_preview_uses_a_given_factor():
+    preview = _preview_of("500/1", factor=10)
+    assert preview.filters == "select=not(mod(n\\,10))"
+    assert preview.codec_params[-2:] == ("-g", "100")  # two seconds at 50 fps
+
+
+def test_with_preview_rejects_a_nonpositive_factor():
+    with pytest.raises(ValueError, match="at least 1"):
+        _preview_of("500/1", factor=0)
+
+
+def test_transcode_thins_preview_and_metadata_by_one_factor(monkeypatch, tmp_path):
+    seen: list = []
+    real = transcode_mod.with_preview
+
+    def spy(profile, probe_json, **kwargs):
+        seen.append(kwargs.get("factor"))
+        return real(profile, probe_json, **kwargs)
+
+    monkeypatch.setattr(transcode_mod, "with_preview", spy)
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    assert seen == [20]
+
+
+def test_with_preview_uses_the_spec_name_by_default():
+    assert _preview_of("500/1").output_path_for(Path("/d/video.mp4")) == Path("/d/preview.mp4")
+
+
+def test_with_preview_names_from_the_stem_without_a_filename():
+    assert _preview_of("500/1", filename=None).output_path_for(Path("/d/clip.mp4")) == Path("/d/clip_preview.mp4")
+
+
+def test_derivative_needs_a_filename_or_a_suffix():
+    with pytest.raises(ValueError, match="overwrite the primary"):
+        _dummy_derivative(suffix="")
+
+
 # ---------------------------------------------------------------------------
 # with_poster
 # ---------------------------------------------------------------------------
@@ -1337,23 +1392,66 @@ def test_with_poster_cannot_clamp_without_a_frame_count():
     assert _poster_frame(_poster_of(at_seconds=1.0)) == 500
 
 
+@pytest.mark.parametrize(("nb_frames", "frame"), [("42000", 21000), ("41999", 20999), ("1", 0)])
+def test_with_poster_defaults_to_the_middle_frame(nb_frames, frame):
+    assert _poster_frame(_poster_of(nb_frames=nb_frames)) == frame
+
+
+def test_with_poster_counts_matroska_frames_from_packets():
+    stream = {"r_frame_rate": "500/1", "nb_frames": "N/A", "nb_read_packets": "1000"}
+    assert _poster_frame(with_poster(OFFLINE_8BIT, {"streams": [stream]}).derivatives[0]) == 500
+
+
+def test_with_poster_estimates_the_middle_from_the_duration():
+    stream = {"r_frame_rate": "500/1", "duration": "2.0"}
+    assert _poster_frame(with_poster(OFFLINE_8BIT, {"streams": [stream]}).derivatives[0]) == 500
+
+
+def test_with_poster_reads_matroska_duration_from_the_container():
+    probe_json = {"streams": [{"r_frame_rate": "500/1", "nb_frames": "N/A"}], "format": {"duration": "2.0"}}
+    assert _poster_frame(with_poster(OFFLINE_8BIT, probe_json).derivatives[0]) == 500
+
+
+def test_with_poster_prefers_an_exact_count_to_the_duration():
+    stream = {"r_frame_rate": "500/1", "duration": "2.0", "nb_read_packets": "595"}
+    assert _poster_frame(with_poster(OFFLINE_8BIT, {"streams": [stream]}).derivatives[0]) == 297
+
+
+def test_with_poster_needs_a_count_or_a_duration_for_the_middle_frame():
+    with pytest.raises(RuntimeError, match="count_packets"):
+        with_poster(OFFLINE_8BIT, {"streams": [{"r_frame_rate": "500/1"}]})
+
+
+def test_with_poster_takes_an_explicit_frame():
+    assert _poster_frame(_poster_of(frame=7)) == 7
+
+
+def test_with_poster_rejects_frame_and_seconds_together():
+    with pytest.raises(ValueError, match="not both"):
+        _poster_of(nb_frames="100", frame=1, at_seconds=1.0)
+
+
+def test_with_poster_uses_the_spec_name_by_default():
+    assert _poster_of(nb_frames="10").output_path_for(Path("/d/video.mp4")) == Path("/d/poster.jpg")
+
+
 def test_with_poster_taps_the_conditioned_source():
-    assert _poster_of().tap == "source"
+    assert _poster_of(nb_frames="10").tap == "source"
 
 
 def test_with_poster_carries_no_setparams_of_its_own():
     """The conditioning upstream of the tap supplies it, range_override included."""
-    assert "setparams" not in _poster_of().filters
+    assert "setparams" not in _poster_of(nb_frames="10").filters
 
 
 def test_with_poster_encodes_srgb_from_linear():
-    filters = _poster_of().filters
+    filters = _poster_of(nb_frames="10").filters
     assert filters.startswith("select=")  # select first, so the colour work runs on one frame
     assert filters.endswith("zscale=t=iec61966-2-1:r=full")
 
 
 def test_with_poster_writes_one_image():
-    poster = _poster_of()
+    poster = _poster_of(nb_frames="10")
     assert poster.output_flags == ("-frames:v", "1", "-update", "1")
     assert poster.codec == "mjpeg"
     assert poster.container == "jpg"
@@ -1364,15 +1462,16 @@ def test_with_poster_rejects_negative_seconds():
         _poster_of(at_seconds=-1.0)
 
 
-def test_with_poster_rejects_duplicate_suffix():
-    once = with_poster(OFFLINE_8BIT, {"streams": [{"r_frame_rate": "500/1"}]})
+def test_with_poster_rejects_duplicate_name():
+    probe_json = {"streams": [{"r_frame_rate": "500/1", "nb_frames": "10"}]}
+    once = with_poster(OFFLINE_8BIT, probe_json)
     with pytest.raises(ValueError, match="same path"):
-        with_poster(once, {"streams": [{"r_frame_rate": "500/1"}]})
+        with_poster(once, probe_json)
 
 
 def test_with_poster_raises_without_readable_rate():
     with pytest.raises(RuntimeError, match="r_frame_rate"):
-        with_poster(OFFLINE_8BIT, {"streams": [{}]})
+        with_poster(OFFLINE_8BIT, {"streams": [{}]}, at_seconds=1.0)
 
 
 def test_preview_and_poster_compose():
@@ -1382,8 +1481,8 @@ def test_preview_and_poster_compose():
     assert [d.tap for d in profile.derivatives] == ["shared", "source"]
     assert profile.output_paths(Path("/d/video.mp4")) == [
         Path("/d/video.mp4"),
-        Path("/d/video_preview.mp4"),
-        Path("/d/video_poster.jpg"),
+        Path("/d/preview.mp4"),
+        Path("/d/poster.jpg"),
     ]
 
 
@@ -1412,7 +1511,7 @@ def test_preview_command_keeps_cfr_setpts_at_the_head_of_the_shared_chain(monkey
 def test_preview_command_writes_both_paths(monkeypatch, tmp_path):
     captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
     transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
-    assert captured[0][-1] == str(tmp_path / "out_preview.mp4")
+    assert captured[0][-1] == str(tmp_path / "preview.mp4")
     assert str(tmp_path / "out.mp4") in captured[0]
 
 
@@ -1459,14 +1558,20 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     """
     src = tmp_path / "src.avi"
     dst = tmp_path / "out.mp4"
-    preview = tmp_path / "out_preview.mp4"
+    preview = tmp_path / "preview.mp4"
     # Widely separated luma so a one-frame misalignment cannot hide inside
     # encoder noise: adjacent retained frames differ by >= 20 after the chain.
     _encode_untagged_yuv420p(src, [30 + 2 * n for n in range(100)], framerate=500)
 
+    metadata_csv = tmp_path / "metadata.csv"
+    metadata_csv.write_text("ReferenceTime\n" + "".join(f"{n / 500}\n" for n in range(100)))
+
     fast = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
-    assert transcode_video(src, dst, profile=fast, preview_fps=25.0) == dst
+    assert transcode_video(src, dst, profile=fast, preview_fps=25.0, metadata_csv=metadata_csv) == dst
     assert preview.exists()
+    # Row k of the sidecar is the time of preview frame k, source frame 20k.
+    times = pq.read_table(tmp_path / "preview_metadata.parquet").column("ReferenceTime").to_pylist()
+    assert times == pytest.approx([20 * k / 500 for k in range(5)])
 
     def _probe_stream(path: Path) -> dict:
         out = subprocess.run(

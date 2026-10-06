@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 plotting = ["matplotlib", "opencv-python-headless>=4.13.0.90"]
 transcode = ["pydantic-settings>=2.4", "rich>=13.0"]
+parquet = ["pyarrow>=14"]
 
 [project.urls]
 Repository = "https://github.com/AllenNeuralDynamics/aind-video-utils/"
@@ -34,7 +35,7 @@ aind-transcode = "aind_video_utils.scripts.transcode_cli:main"
 
 [dependency-groups]
 types = ["mypy"]
-dev = [{ include-group = "types" }, "aind-video-utils[plotting]", "aind-video-utils[transcode]", "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
+dev = [{ include-group = "types" }, "aind-video-utils[plotting]", "aind-video-utils[transcode]", "aind-video-utils[parquet]", "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
 jupyter = [{ include-group = "dev" }, "ipykernel", "pip"]
 
 [tool.hatch.build.targets.wheel]
@@ -86,6 +87,10 @@ files = ["src/aind_video_utils"]
 strict = true
 show_error_codes = true
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"

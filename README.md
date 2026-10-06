@@ -27,12 +27,14 @@ uv add "aind-video-utils[plotting]"             # with QC plotting
 pip install aind-video-utils
 pip install "aind-video-utils[transcode]"
 pip install "aind-video-utils[plotting]"
+pip install "aind-video-utils[parquet]"
 ```
 
 | Extra | Adds |
 |-------|------|
 | `transcode` | pydantic-settings, rich — required for `aind-transcode` CLI |
 | `plotting` | matplotlib, opencv — required for `aind-video-qc` CLI |
+| `parquet` | pyarrow — required to write `preview_metadata.parquet` |
 
 ## Usage
 
@@ -52,7 +54,8 @@ srgb = extract_srgb_frame("video.mp4", 1.0)
 
 ### Encoding Profiles
 
-This package is the canonical Python source for the [AIND behavior video file standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/) encoding profiles. Four profiles are provided as frozen dataclass constants:
+This package is the canonical Python source for the [AIND behavior video file standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/) encoding profiles. `SPEC_VERSION` names the revision of the standard they implement. Four profiles are
+provided as frozen dataclass constants:
 
 | Constant | Codec | Pixel Format | Container | Use Case |
 |----------|-------|-------------|-----------|----------|
@@ -118,18 +121,33 @@ number of frames than ffmpeg decoded from the source; pass
 ### Preview and Poster Derivatives
 
 `transcode_video()` can also write a browser-playable preview and a JPEG
-poster, as extra outputs of the same ffmpeg process:
+poster, as extra outputs of the same ffmpeg process, under the names the
+standard gives them:
 
 ```python
 from aind_video_utils import transcode_video
 
 transcode_video(
     input_path,
-    output_path,            # clip.mp4          archival, frame-exact
-    preview_fps=30.0,       # clip_preview.mp4  every N-th source frame
-    poster_at_seconds=1.0,  # clip_poster.jpg   sRGB still
+    camera_dir / "video.mp4",                  # archival, frame-exact
+    preview_fps=30.0,                          # preview.mp4: every N-th source frame
+    metadata_csv=camera_dir / "metadata.csv",  # preview_metadata.parquet: ReferenceTime of each preview frame
+    poster=True,                               # poster.jpg: sRGB still of the middle frame
 )
 ```
+
+The poster's middle frame comes from the frame count the container records.
+Matroska records none, so for an `.mkv` it is estimated from the duration;
+`count_frames=True` counts packets for the exact frame instead, at the cost of
+reading the whole source once more, which for a URL is a second download. A
+recording killed mid-write records no duration either, and its packets are
+counted regardless. If a truncated file's duration places the poster past its
+end, ffmpeg fails the run, though the archival video it wrote is complete.
+
+The standard requires `preview_metadata.parquet` beside every preview. Its row
+k is row kN of `metadata.csv`, so `metadata.csv` must have one row per frame of
+the archival video; `transcode_video()` raises otherwise and writes no sidecar.
+It needs the `parquet` extra. `write_preview_metadata()` writes one on its own.
 
 N puts the preview between 25 and 35 fps, preferring a whole-number rate:
 
@@ -149,7 +167,11 @@ gives the rationale for both.
 
 To build the command yourself, attach derivatives to a conditioned profile.
 Without `with_setparams`, the poster's `zscale` has no transfer function to
-resolve, and its failure takes the archival encode down with it:
+resolve, and its failure takes the archival encode down with it. The poster's
+middle frame comes from the probe's frame count, or its duration when it has
+none; `probe(input_path, count_packets=True)` gives an `.mkv` an exact count. Pass
+`filename=None` to `with_preview` or `with_poster` to name a derivative from
+the primary's stem and a suffix instead, as in `clip_preview.mp4`:
 
 ```python
 from aind_video_utils import (
@@ -160,7 +182,7 @@ probe_json = probe(input_path)
 conditioned = with_setparams(OFFLINE_8BIT, probe_json)
 profile = with_poster(with_preview(conditioned, probe_json), probe_json)
 
-profile.output_paths(output_path)  # [clip.mp4, clip_preview.mp4, clip_poster.jpg]
+profile.output_paths(output_path)  # [video.mp4, preview.mp4, poster.jpg]
 profile.ffmpeg_graph_args()        # ["-filter_complex", "[0:v]setparams=...,split=2[chain][d1];..."]
 profile.ffmpeg_output_groups()     # one argument list per output, in the same order
 ```
