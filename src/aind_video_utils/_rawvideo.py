@@ -7,9 +7,7 @@ import itertools
 import numpy as np
 import numpy.typing as npt
 
-_SUPPORTED_YUV_FORMATS_8BIT = {
-    "".join(["yuv", r, chroma, "p"]) for r, chroma in itertools.product(["j", ""], ["420", "422", "444"])
-}
+_SUPPORTED_YUV_FORMATS_8BIT = {f"yuv{r}{chroma}p" for r, chroma in itertools.product(["j", ""], ["420", "422", "444"])}
 
 # yuvj* formats are deprecated 8-bit-only aliases; 10-bit has no j-prefix variants
 _SUPPORTED_YUV_FORMATS_10BIT = {f"yuv{chroma}p10le" for chroma in ["420", "422", "444"]}

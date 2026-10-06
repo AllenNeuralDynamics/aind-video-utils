@@ -1,5 +1,6 @@
 """QC functions comparing video frames before and after encoding."""
 
+import subprocess as sp
 from pathlib import Path
 from typing import Any
 
@@ -116,14 +117,14 @@ def compare_linear_to_bt709(
     luma_range_output = luma_range(depth_output, is_full_range_output)
     (
         fig,
-        ax_input_srgb,
-        ax_output_srgb,
-        ax_input_luma,
-        ax_output_luma,
+        _ax_input_srgb,
+        _ax_output_srgb,
+        _ax_input_luma,
+        _ax_output_luma,
         ax_bivariate,
-        ax_top_marginal,
-        ax_right_marginal,
-        gs,
+        _ax_top_marginal,
+        _ax_right_marginal,
+        _gs,
     ) = luma_comparison_figure(
         luma_input,
         luma_output,
@@ -552,7 +553,7 @@ def transcode_qc_figure(
     for t in noise_ts:
         try:
             noise_planes.append(extract_luma_frame(input_video_path, float(t), in_probe)[0].astype(np.float64))
-        except Exception:  # a deep remote seek can fail transiently; drop that sample rather than crash
+        except (sp.CalledProcessError, ValueError):  # a deep remote seek can fail transiently; drop the sample
             continue
     mean, variance = noise_transfer_curve(noise_planes)
     verdict = classify_gamma(mean, variance)
