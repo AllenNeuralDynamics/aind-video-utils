@@ -17,6 +17,8 @@ from typing import Any
 
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
+    POSTER_FILENAME,
+    PREVIEW_FILENAME,
     EncodingProfile,
     RangeOverride,
     preview_decimation,
@@ -24,7 +26,7 @@ from aind_video_utils.encoding import (
     with_preview,
     with_setparams,
 )
-from aind_video_utils.preview_metadata import PREVIEW_METADATA_FILENAME, read_frame_metadata, write_decimated
+from aind_video_utils.preview_metadata import preview_metadata_path, read_frame_metadata, write_decimated
 from aind_video_utils.probe import get_duration_seconds, get_exact_nb_frames, get_r_frame_rate, probe
 from aind_video_utils.utils import http_input_flags
 
@@ -50,6 +52,10 @@ _DECODED_RE = re.compile(
 )
 _PROBLEM_RE = re.compile(rb"\[(?:warning|error|fatal|panic)\]")
 _STDERR_TAIL_LINES = 200
+
+# The spec names a camera folder's primary video ``video.<ext>``; derivatives of
+# any other primary take its stem, so two primaries in one folder cannot collide.
+_SPEC_PRIMARY_STEM = "video"
 
 
 class FfmpegError(subprocess.CalledProcessError):
@@ -88,6 +94,7 @@ def _effective_profile(
     poster: bool,
     poster_at_seconds: float | None,
     count_frames: bool,
+    spec_names: bool,
 ) -> tuple[EncodingProfile, int | None]:
     """Apply the probe-driven adjustments to *profile*.
 
@@ -97,7 +104,9 @@ def _effective_profile(
     ``preview_fps`` / ``poster``).  Probes the source once, and a second time
     to count packets only when the poster needs the middle frame of a source
     that records no frame count and either ``count_frames`` asks for the exact
-    one or the source records no duration to estimate it from.
+    one or the source records no duration to estimate it from.  With
+    ``spec_names`` the derivatives take the spec's file names, and otherwise
+    the primary's stem and a suffix.
 
     Returns the profile and the preview's decimation factor, ``None`` without
     a preview.
@@ -125,7 +134,9 @@ def _effective_profile(
         assert probe_json is not None
         factor, _ = preview_decimation(probe_json, target_fps=preview_fps)
         # The same factor thins the preview and preview_metadata.parquet, so their rows cannot drift apart.
-        effective = with_preview(effective, probe_json, factor=factor)
+        effective = with_preview(
+            effective, probe_json, factor=factor, filename=PREVIEW_FILENAME if spec_names else None
+        )
     if poster:
         assert probe_json is not None
         if (
@@ -134,7 +145,9 @@ def _effective_profile(
             and (count_frames or get_duration_seconds(probe_json) is None)
         ):
             probe_json = probe(input_path, count_packets=True)
-        effective = with_poster(effective, probe_json, at_seconds=poster_at_seconds)
+        effective = with_poster(
+            effective, probe_json, at_seconds=poster_at_seconds, filename=POSTER_FILENAME if spec_names else None
+        )
     return effective, factor
 
 
@@ -148,7 +161,9 @@ def _check_derivatives_written(counts: _FrameCounts, paths: list[Path]) -> None:
             )
 
 
-def _check_metadata_rows(frame_metadata: Any, counts: _FrameCounts, metadata_csv: Path, output_path: Path) -> None:
+def _check_metadata_rows(
+    frame_metadata: Any, counts: _FrameCounts, metadata_csv: Path, output_path: Path, metadata_path: Path
+) -> None:
     """Raise unless *metadata_csv* has one row per frame of *output_path*.
 
     Without that, row ``k * N`` of the decimated table does not describe preview
@@ -162,7 +177,7 @@ def _check_metadata_rows(frame_metadata: Any, counts: _FrameCounts, metadata_csv
     if frame_metadata.num_rows != encoded:
         raise RuntimeError(
             f"{metadata_csv} has {frame_metadata.num_rows} rows but {output_path} has {encoded} frames, so "
-            f"{PREVIEW_METADATA_FILENAME} would not line up with the preview; it was not written."
+            f"{metadata_path.name} would not line up with the preview; it was not written."
         )
 
 
@@ -270,7 +285,11 @@ def transcode_video(
     input_path : Path
         Source video file.
     output_path : Path
-        Destination file.
+        Destination file.  Derivatives beside it take the spec's names when it
+        is named ``video.<ext>``, as the spec names a camera folder's primary
+        video, and otherwise its stem and a suffix, as in
+        ``BottomCamera_preview.mp4``, so primaries sharing a folder keep their
+        derivatives apart.
     profile : EncodingProfile
         Encoding profile to use.  Defaults to :data:`OFFLINE_8BIT`.
     auto_fix_colorspace : bool
@@ -302,8 +321,8 @@ def transcode_video(
         derivatives, which drop frames by design.  Set to ``False`` when
         legitimately resampling variable-frame-rate input to CFR.
     preview_fps : float | None
-        When set, also write ``preview.mp4`` beside *output_path*, a
-        frame-decimated preview encoded as a second output of the same ffmpeg
+        When set, also write ``preview.mp4`` (or ``<stem>_preview.mp4``)
+        beside *output_path*, a frame-decimated preview encoded as a second output of the same ffmpeg
         process, sharing the decode and the colour chain.  The value is a
         target rather than an exact rate: the integer decimation factor comes
         from :func:`aind_video_utils.encoding.preview_decimation`, so every
@@ -312,12 +331,13 @@ def transcode_video(
     metadata_csv : Path | None
         The camera's ``metadata.csv``.  With ``preview_fps`` set, its
         ``ReferenceTime`` column, decimated as the preview is, is written to
-        ``preview_metadata.parquet`` beside *output_path*, which the spec
-        requires of every preview.  It is read before encoding, so a missing
+        ``preview_metadata.parquet`` (or ``<stem>_preview_metadata.parquet``)
+        beside *output_path*, which the spec requires of every preview.  It is read before encoding, so a missing
         file, column or the ``parquet`` extra fails fast.  See
         :mod:`aind_video_utils.preview_metadata`.
     poster : bool
-        When ``True``, also write ``poster.jpg`` beside *output_path*: the
+        When ``True``, also write ``poster.jpg`` (or ``<stem>_poster.jpg``)
+        beside *output_path*: the
         middle frame, branched off the conditioned source and encoded as sRGB
         so it matches what a browser shows for the video beside it.  Where the
         container records no frame count, as Matroska does not, the middle is
@@ -380,6 +400,7 @@ def transcode_video(
         poster=poster,
         poster_at_seconds=poster_at_seconds,
         count_frames=count_frames,
+        spec_names=output_path.stem == _SPEC_PRIMARY_STEM,
     )
 
     cmd: list[str] = ["ffmpeg", *_FFMPEG_LOG_ARGS, "-progress", "pipe:1", "-nostats", "-y"]
@@ -399,6 +420,9 @@ def transcode_video(
     _check_derivatives_written(counts, effective.output_paths(output_path)[1:])
     if frame_metadata is not None:
         assert metadata_csv is not None and factor is not None
-        _check_metadata_rows(frame_metadata, counts, metadata_csv, output_path)
-        write_decimated(frame_metadata, output_path.with_name(PREVIEW_METADATA_FILENAME), factor)
+        # with_preview appends after the caller's own derivatives.
+        preview_path = effective.derivatives[len(profile.derivatives)].output_path_for(output_path)
+        metadata_path = preview_metadata_path(preview_path)
+        _check_metadata_rows(frame_metadata, counts, metadata_csv, output_path, metadata_path)
+        write_decimated(frame_metadata, metadata_path, factor)
     return output_path

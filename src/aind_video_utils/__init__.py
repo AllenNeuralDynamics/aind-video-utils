@@ -22,7 +22,7 @@ from aind_video_utils.encoding import (
 )
 from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
 from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, read_mp4_frame_index
-from aind_video_utils.preview_metadata import PREVIEW_METADATA_FILENAME, write_preview_metadata
+from aind_video_utils.preview_metadata import PREVIEW_METADATA_FILENAME, preview_metadata_path, write_preview_metadata
 from aind_video_utils.probe import (
     get_color_transfer,
     get_exact_nb_frames,
@@ -69,6 +69,7 @@ __all__ = [
     "luma_range",
     "pix_format_bit_depth",
     "preview_decimation",
+    "preview_metadata_path",
     "probe",
     "read_mp4_frame_index",
     "rec_709_trc_to_linear",

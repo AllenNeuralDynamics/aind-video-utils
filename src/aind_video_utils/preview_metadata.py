@@ -64,6 +64,11 @@ def read_frame_metadata(metadata_csv: Path, columns: Sequence[str] | None = REQU
     return table
 
 
+def preview_metadata_path(preview_path: Path) -> Path:
+    """Return the metadata path paired with *preview_path*, the spec's name for ``preview.mp4``."""
+    return preview_path.with_name(f"{preview_path.stem}_metadata.parquet")
+
+
 def write_decimated(table: Any, output_path: Path, factor: int) -> Path:
     """Write rows ``0, factor, 2 * factor, ...`` of *table* to *output_path* as Parquet.
 

@@ -149,6 +149,11 @@ k is row kN of `metadata.csv`, so `metadata.csv` must have one row per frame of
 the archival video; `transcode_video()` raises otherwise and writes no sidecar.
 It needs the `parquet` extra. `write_preview_metadata()` writes one on its own.
 
+The derivatives take these names when the archival video is named `video.<ext>`,
+as the standard names it. Otherwise they take its stem, so `BottomCamera.mp4`
+gets `BottomCamera_preview.mp4`, `BottomCamera_preview_metadata.parquet` and
+`BottomCamera_poster.jpg`, and two videos in one folder keep theirs apart.
+
 N puts the preview between 25 and 35 fps, preferring a whole-number rate:
 
 | Source | N | Preview |

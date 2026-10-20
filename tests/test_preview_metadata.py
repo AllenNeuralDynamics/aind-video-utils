@@ -110,6 +110,14 @@ def test_transcode_writes_preview_metadata_beside_the_primary(monkeypatch, tmp_p
     assert table.column("ReferenceTime").to_pylist() == pytest.approx([1000.0 + 0.04 * k for k in range(5)])
 
 
+def test_transcode_names_preview_metadata_after_the_preview(monkeypatch, tmp_path):
+    _patch(monkeypatch, _summary(100, 100, 5))
+    csv = _metadata_csv(tmp_path / "metadata.csv", 100)
+    transcode_video(tmp_path / "in.avi", tmp_path / "BottomCamera.mp4", preview_fps=25.0, metadata_csv=csv)
+    assert (tmp_path / "BottomCamera_preview_metadata.parquet").exists()
+    assert not (tmp_path / "preview_metadata.parquet").exists()
+
+
 def test_transcode_refuses_metadata_that_does_not_match_the_frames(monkeypatch, tmp_path):
     _patch(monkeypatch, _summary(100, 100, 5))
     csv = _metadata_csv(tmp_path / "metadata.csv", 99)

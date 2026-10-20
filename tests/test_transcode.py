@@ -1162,7 +1162,7 @@ def test_archive_preview_and_poster_from_one_invocation(tmp_path: Path) -> None:
     )
 
     profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
-    dst = tmp_path / "v.mp4"
+    dst = tmp_path / "video.mp4"
     # One invocation, three outputs: archive, decimated preview, sRGB still.
     assert transcode_video(src, dst, profile=profile, preview_fps=30.0, poster_at_seconds=0.1) == dst
     assert (tmp_path / "preview.mp4").exists()
@@ -1509,9 +1509,17 @@ def test_preview_command_keeps_cfr_setpts_at_the_head_of_the_shared_chain(monkey
 
 def test_preview_command_writes_both_paths(monkeypatch, tmp_path):
     captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
-    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0)
+    transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", preview_fps=25.0)
     assert captured[0][-1] == str(tmp_path / "preview.mp4")
-    assert str(tmp_path / "out.mp4") in captured[0]
+    assert str(tmp_path / "video.mp4") in captured[0]
+
+
+def test_derivatives_of_a_primary_not_named_video_take_its_stem(monkeypatch, tmp_path):
+    """Two primaries in one folder would otherwise both write preview.mp4 and poster.jpg."""
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "BottomCamera.mp4", preview_fps=25.0, poster_at_seconds=0.1)
+    assert str(tmp_path / "BottomCamera_preview.mp4") in captured[0]
+    assert captured[0][-1] == str(tmp_path / "BottomCamera_poster.jpg")
 
 
 def test_preview_command_strips_audio_from_every_output(monkeypatch, tmp_path):
@@ -1557,7 +1565,7 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     """
     pq = pytest.importorskip("pyarrow.parquet")
     src = tmp_path / "src.avi"
-    dst = tmp_path / "out.mp4"
+    dst = tmp_path / "video.mp4"
     preview = tmp_path / "preview.mp4"
     # Widely separated luma so a one-frame misalignment cannot hide inside
     # encoder noise: adjacent retained frames differ by >= 20 after the chain.
