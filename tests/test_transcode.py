@@ -1522,6 +1522,32 @@ def test_derivatives_of_a_primary_not_named_video_take_its_stem(monkeypatch, tmp
     assert captured[0][-1] == str(tmp_path / "BottomCamera_poster.jpg")
 
 
+def _option_values(cmd: list, flag: str) -> list:
+    return [cmd[i + 1] for i, arg in enumerate(cmd) if arg == flag]
+
+
+def test_threads_bind_the_decoder_filters_and_every_encoder(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", preview_fps=25.0, threads=4)
+    cmd = captured[0]
+    assert _option_values(cmd, "-filter_threads") == ["4"]
+    assert _option_values(cmd, "-filter_complex_threads") == ["4"]
+    # One for the decoder, ahead of -i, and one for each of the two encoders.
+    assert _option_values(cmd, "-threads") == ["4", "4", "4"]
+    assert cmd.index("-threads") < cmd.index("-i")
+
+
+def test_no_thread_options_by_default(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
+    transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4")
+    assert not {"-threads", "-filter_threads", "-filter_complex_threads"} & set(captured[0])
+
+
+def test_threads_must_be_positive(tmp_path):
+    with pytest.raises(ValueError, match="threads"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", threads=0)
+
+
 def test_preview_command_strips_audio_from_every_output(monkeypatch, tmp_path):
     captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="500/1")
     transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", preview_fps=25.0, no_audio=True)
@@ -1575,7 +1601,8 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     metadata_csv.write_text("ReferenceTime\n" + "".join(f"{n / 500}\n" for n in range(100)))
 
     fast = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
-    assert transcode_video(src, dst, profile=fast, preview_fps=25.0, metadata_csv=metadata_csv) == dst
+    # threads=2 checks that ffmpeg accepts -threads in every output group of a split graph.
+    assert transcode_video(src, dst, profile=fast, preview_fps=25.0, metadata_csv=metadata_csv, threads=2) == dst
     assert preview.exists()
     # Row k of the sidecar is the time of preview frame k, source frame 20k.
     times = pq.read_table(tmp_path / "preview_metadata.parquet").column("ReferenceTime").to_pylist()

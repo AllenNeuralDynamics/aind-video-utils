@@ -275,6 +275,7 @@ def transcode_video(
     poster: bool = False,
     poster_at_seconds: float | None = None,
     count_frames: bool = False,
+    threads: int | None = None,
     no_audio: bool = True,
     on_progress: Callable[[int], None] | None = None,
 ) -> Path:
@@ -353,6 +354,10 @@ def transcode_video(
         for a URL.  Without it, packets are counted only when the source
         records no duration either, as a recording that was killed mid-write
         does not.
+    threads : int | None
+        Thread count for ffmpeg's decoder, filter graph and each encoder, so a
+        process confined to a share of a machine stays within it.  ``None``
+        leaves ffmpeg's default, which sizes each to every core.
     no_audio : bool
         If ``True``, strip audio (``-an``).
     on_progress : Callable[[int], None] | None
@@ -383,12 +388,14 @@ def transcode_video(
         without writing a frame to a derivative.
     ValueError
         If ``metadata_csv`` is given without ``preview_fps``, or lacks the
-        ``ReferenceTime`` column.
+        ``ReferenceTime`` column, or ``threads`` is less than 1.
     ImportError
         If ``metadata_csv`` is given without the ``parquet`` extra installed.
     """
     if metadata_csv is not None and preview_fps is None:
         raise ValueError("metadata_csv describes a preview's frames, so it needs preview_fps")
+    if threads is not None and threads < 1:
+        raise ValueError(f"threads must be at least 1, got {threads}")
     frame_metadata = read_frame_metadata(metadata_csv) if metadata_csv is not None else None
     effective, factor = _effective_profile(
         profile,
@@ -403,13 +410,19 @@ def transcode_video(
         spec_names=output_path.stem == _SPEC_PRIMARY_STEM,
     )
 
+    # -threads binds the codec of the input or output it precedes, so the
+    # decoder and every encoder each need their own copy.
+    codec_threads = ["-threads", str(threads)] if threads is not None else []
     cmd: list[str] = ["ffmpeg", *_FFMPEG_LOG_ARGS, "-progress", "pipe:1", "-nostats", "-y"]
+    if threads is not None:
+        cmd.extend(["-filter_threads", str(threads), "-filter_complex_threads", str(threads)])
     cmd.extend(http_input_flags(input_path))
     cmd.extend(effective.ffmpeg_input_args())
-    cmd.extend(["-i", str(input_path)])
+    cmd.extend([*codec_threads, "-i", str(input_path)])
     cmd.extend(effective.ffmpeg_graph_args())
     for group, path in zip(effective.ffmpeg_output_groups(), effective.output_paths(output_path), strict=True):
         cmd.extend(group)
+        cmd.extend(codec_threads)
         if no_audio:
             cmd.append("-an")
         cmd.append(str(path))

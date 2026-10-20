@@ -112,6 +112,9 @@ transcode_video(input_path, output_path, auto_fix_colorspace=False)
 
 # Legacy h264-in-AVI sources: re-stamp timestamps so ffmpeg keeps every frame
 transcode_video(input_path, output_path, normalize_cfr=True)
+
+# Hold the decoder, filters and each encoder to 8 threads, e.g. in an 8-CPU job
+transcode_video(input_path, output_path, threads=8)
 ```
 
 `transcode_video()` raises `RuntimeError` when the output holds a different
