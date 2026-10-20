@@ -34,5 +34,7 @@ jobs:
       python-version: ${{ matrix.python-version }}
       package-name: aind_video_utils
       run-mypy: true
+      # plotting, video_qc and the CLIs are the optional modules those extras exist for.
+      smoke-extras: plotting,transcode,parquet
     secrets:
       repo-token: ${{ secrets.GITHUB_TOKEN }}
