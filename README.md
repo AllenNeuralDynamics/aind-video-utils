@@ -95,6 +95,8 @@ cmd = [
 ### Transcoding Python API
 
 ```python
+from fractions import Fraction
+
 from aind_video_utils import transcode_video, OFFLINE_8BIT
 
 # Simplest form — offline 8-bit with automatic colorspace fix
@@ -110,8 +112,10 @@ transcode_video(input_path, output_path, profile=fast)
 # Skip automatic setparams probing
 transcode_video(input_path, output_path, auto_fix_colorspace=False)
 
-# Legacy h264-in-AVI sources: re-stamp timestamps so ffmpeg keeps every frame
+# Legacy h264-in-AVI sources: re-stamp timestamps so ffmpeg keeps every frame.
+# The rate is measured from an MP4, MOV or AVI; pass frame_rate= for anything else.
 transcode_video(input_path, output_path, normalize_cfr=True)
+transcode_video(input_path, output_path, normalize_cfr=True, frame_rate=Fraction(500))
 
 # Hold the decoder, filters and each encoder to 8 threads, e.g. in an 8-CPU job
 transcode_video(input_path, output_path, threads=8)

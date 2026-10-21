@@ -251,6 +251,40 @@ def test_display_order_sorts_by_pts_stably():
     assert order.tolist() == [0, 3, 2, 1]
 
 
+def test_frame_period_is_the_most_common_step_not_one_doubled_by_a_gap():
+    pts = [0, 32, 64, 96, 160, 192, 224]  # one missing slot
+    assert _index(pts=pts).frame_period == 32
+
+
+def test_frame_period_ignores_decode_order():
+    assert _index(pts=[0, 96, 32, 64, 192, 128, 160]).frame_period == 32
+
+
+def test_frame_period_needs_two_distinct_timestamps():
+    with pytest.raises(ValueError, match="at least two samples"):
+        _ = _index(pts=[0]).frame_period
+
+
+def test_timeline_notches_reports_display_and_decode_positions():
+    # Decode order with B-frames; a 2-slot notch after display index 3, and
+    # DTS late by 2 slots from decode index 5, as a concat seam leaves them.
+    pts = [64, 160, 96, 128, 256, 352, 288, 320]
+    dts = [0, 32, 64, 96, 128, 224, 256, 288]
+    notches = _index(pts=pts, dts=dts).timeline_notches()
+    assert notches.period == 32
+    assert notches.pts_after.tolist() == [3]
+    assert notches.pts_steps.tolist() == [96]
+    assert notches.dts_after.tolist() == [4]
+    assert notches.dts_steps.tolist() == [96]
+    assert not notches.is_uniform
+
+
+def test_timeline_notches_uniform():
+    notches = _index(pts=[64, 160, 96, 128], dts=[0, 32, 64, 96]).timeline_notches()
+    assert notches.is_uniform
+    assert notches.pts_after.size == notches.dts_after.size == 0
+
+
 def test_keyframe_decode_indices():
     idx = _index(pts=[0, 1, 2, 3], is_keyframe=[True, False, True, False])
     assert idx.keyframe_decode_indices.tolist() == [0, 2]

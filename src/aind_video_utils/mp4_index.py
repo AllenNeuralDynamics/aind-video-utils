@@ -15,10 +15,11 @@ files — including over HTTP(S), where it fetches the ``moov`` with ``Range``
 requests.  It handles both 32-bit ``stco`` and 64-bit ``co64`` chunk offsets —
 the latter is mandatory for files over 4 GB.
 
-The index is immune to the glitchy-PTS problem that afflicts concat-seam
-timelines: presentation order is recovered by *sorting* PTS (a stable argsort),
-which the ±few-tick seam stretches cannot perturb, and frame-to-byte lookups
-never touch a timestamp at all.
+The index is immune to the notched timelines a concat ``-c copy`` can leave at
+a seam, where every frame after it is stamped late, by two frame slots (64
+ticks) in AIND's 500 fps batch transcodes: presentation order is recovered by
+*sorting* PTS (a stable argsort), which a forward notch cannot perturb, and
+frame-to-byte lookups never touch a timestamp at all.  :meth:`Mp4FrameIndex.timeline_notches` reports the notches.
 """
 
 from __future__ import annotations
@@ -213,6 +214,40 @@ class EditListEntry:
 
 
 @dataclass(frozen=True, eq=False)
+class TimelineNotches:
+    """Where a track's timestamps step by something other than its frame period.
+
+    Positions are 0-based indices: ``pts_after[i]`` is the display index of the
+    frame after which the sorted PTS step by ``pts_steps[i]`` ticks, and
+    ``dts_after`` / ``dts_steps`` the same in decode order.
+
+    Attributes
+    ----------
+    period : int
+        The frame period, the most common step between sorted PTS, in media ticks.
+    pts_after : NDArray[np.intp]
+        Display indices after which the presentation step is not ``period``.
+    pts_steps : NDArray[np.int64]
+        The presentation step at each of ``pts_after``.
+    dts_after : NDArray[np.intp]
+        Decode indices after which the decode step is not ``period``.
+    dts_steps : NDArray[np.int64]
+        The decode step at each of ``dts_after``.
+    """
+
+    period: int
+    pts_after: npt.NDArray[np.intp]
+    pts_steps: npt.NDArray[np.int64]
+    dts_after: npt.NDArray[np.intp]
+    dts_steps: npt.NDArray[np.int64]
+
+    @property
+    def is_uniform(self) -> bool:
+        """Whether PTS and DTS both step by exactly one period throughout."""
+        return self.pts_after.size == 0 and self.dts_after.size == 0
+
+
+@dataclass(frozen=True, eq=False)
 class Mp4FrameIndex:
     """Per-sample index for the video track of an MP4 file.
 
@@ -264,10 +299,52 @@ class Mp4FrameIndex:
 
         ``display_order[k]`` is the decode-order index of the ``k``-th frame in
         presentation order.  Computed with a *stable* argsort of :attr:`pts`, so
-        equal timestamps keep decode order and the seam-glitch stretches (which
-        preserve monotonicity) cannot change the ranking.
+        equal timestamps keep decode order and a forward notch cannot change the
+        ranking.
         """
         return np.argsort(self.pts, kind="stable")
+
+    @property
+    def frame_period(self) -> int:
+        """The frame period in media ticks: the most common step between sorted PTS.
+
+        Unlike ffprobe's ``r_frame_rate``, which a gap or notch in the timeline
+        can double, one bad step cannot outvote the rest.
+
+        Raises
+        ------
+        ValueError
+            If the track has fewer than two samples, or no step is positive.
+        """
+        steps = np.diff(np.sort(self.pts))
+        steps = steps[steps > 0]
+        if steps.size == 0:
+            raise ValueError("a frame period needs at least two samples with distinct PTS")
+        values, counts = np.unique(steps, return_counts=True)
+        return int(values[np.argmax(counts)])
+
+    def timeline_notches(self) -> TimelineNotches:
+        """Report where PTS (display order) and DTS (decode order) step by other than the frame period.
+
+        Reads only the index, so it costs nothing beyond :func:`read_mp4_frame_index`.
+
+        Raises
+        ------
+        ValueError
+            As :attr:`frame_period` does.
+        """
+        period = self.frame_period
+        pts_steps = np.diff(np.sort(self.pts)).astype(np.int64)
+        dts_steps = np.diff(self.dts).astype(np.int64)
+        pts_after = np.flatnonzero(pts_steps != period)
+        dts_after = np.flatnonzero(dts_steps != period)
+        return TimelineNotches(
+            period=period,
+            pts_after=pts_after,
+            pts_steps=pts_steps[pts_after],
+            dts_after=dts_after,
+            dts_steps=dts_steps[dts_after],
+        )
 
     @property
     def keyframe_decode_indices(self) -> npt.NDArray[np.intp]:
@@ -308,8 +385,8 @@ class Mp4FrameIndex:
         frame because it is addressed by its true presentation PTS — read from the
         moov, with the edit list's ``media_time`` subtracted (a single trivial
         ``elst`` maps that media time to presentation 0) — not by an assumed frame
-        rate.  Reading the real timeline is what makes the non-uniform
-        seam-glitch grid (see the module docstring) seek correctly: ffmpeg reads
+        rate.  Reading the real timeline is what makes a notched grid (see the
+        module docstring) seek correctly: ffmpeg reads
         the same ``ctts``/``stts`` and computes the same PTS, so any cumulative
         drift cancels.
 

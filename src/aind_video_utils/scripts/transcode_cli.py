@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -89,6 +90,13 @@ class TranscodeSettings(BaseSettings):
         description=(
             "Re-stamp every frame's timestamp from its index at the source frame rate.  "
             "Legacy h264-in-AVI sources need it, or ffmpeg drops frames."
+        ),
+    )
+    frame_rate: Fraction | None = Field(
+        None,
+        description=(
+            "Rate --normalize_cfr restamps at, such as 500 or 30000/1001.  Measured from an MP4, MOV "
+            "or AVI when unset; other containers need it."
         ),
     )
     overwrite: bool = Field(False, description="Re-encode even if output exists.")
@@ -240,6 +248,7 @@ class TranscodeSettings(BaseSettings):
                     auto_fix_colorspace=not self.no_auto_fix_colorspace,
                     range_override=self.range_override,
                     normalize_cfr=self.normalize_cfr,
+                    frame_rate=self.frame_rate,
                     on_progress=_on_frame,
                 )
 
