@@ -155,6 +155,10 @@ The standard requires `preview_metadata.parquet` beside every preview. Its row
 k is row kN of `metadata.csv`, so `metadata.csv` must have one row per frame of
 the archival video; `transcode_video()` raises otherwise and writes no sidecar.
 It needs the `parquet` extra. `write_preview_metadata()` writes one on its own.
+The values are copied as recorded, flaws included. When `CameraFrameNumber`
+skips or steps backwards, the times may need repair (see Acquisition Timing),
+which needs the rows the preview drops, so a `PreviewTimingWarning` says to
+repair from `metadata.csv` itself.
 
 The derivatives take these names when the archival video is named `video.<ext>`,
 as the standard names it. Otherwise they take its stem, so `BottomCamera.mp4`
@@ -235,7 +239,8 @@ wrong frame. `read_mp4_frame_index()` reads the sample tables from the `moov`
 alone, locally or over HTTP, and `timeline_notches()` reports where the
 timestamps step by anything other than one frame period. `restamp_uniform()`
 removes the notches without re-encoding and checks the result before returning
-it.
+it. `transcode_video()` warns with `NotchedTimelineWarning` when an MP4 or MOV
+source is notched, since the output keeps the notches unless `normalize_cfr=True`.
 
 ```python
 from pathlib import Path

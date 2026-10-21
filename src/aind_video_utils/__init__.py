@@ -23,7 +23,12 @@ from aind_video_utils.encoding import (
 )
 from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
 from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, TimelineNotches, read_mp4_frame_index
-from aind_video_utils.preview_metadata import PREVIEW_METADATA_FILENAME, preview_metadata_path, write_preview_metadata
+from aind_video_utils.preview_metadata import (
+    PREVIEW_METADATA_FILENAME,
+    PreviewTimingWarning,
+    preview_metadata_path,
+    write_preview_metadata,
+)
 from aind_video_utils.probe import (
     get_color_transfer,
     get_exact_nb_frames,
@@ -34,7 +39,7 @@ from aind_video_utils.probe import (
     probe,
 )
 from aind_video_utils.restamp import restamp_uniform
-from aind_video_utils.transcode import VIDEO_EXTENSIONS, FfmpegError, transcode_video
+from aind_video_utils.transcode import VIDEO_EXTENSIONS, FfmpegError, NotchedTimelineWarning, transcode_video
 
 try:
     __version__ = version("aind-video-utils")
@@ -49,6 +54,7 @@ __all__ = [
     "POSTER_FILENAME",
     "PREVIEW_FILENAME",
     "PREVIEW_METADATA_FILENAME",
+    "PreviewTimingWarning",
     "SPEC_VERSION",
     "VIDEO_EXTENSIONS",
     "Derivative",
@@ -57,6 +63,7 @@ __all__ = [
     "FfmpegError",
     "FrameTiming",
     "Mp4FrameIndex",
+    "NotchedTimelineWarning",
     "RangeOverride",
     "RepairedFrameTimes",
     "TimelineNotches",

@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+import warnings
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -28,7 +29,12 @@ from aind_video_utils.encoding import (
     with_setparams,
 )
 from aind_video_utils.mp4_index import read_mp4_frame_index
-from aind_video_utils.preview_metadata import preview_metadata_path, read_frame_metadata, write_decimated
+from aind_video_utils.preview_metadata import (
+    preview_metadata_path,
+    read_frame_metadata,
+    warn_if_frames_dropped,
+    write_decimated,
+)
 from aind_video_utils.probe import ProbeDict, get_duration_seconds, get_exact_nb_frames, probe
 from aind_video_utils.utils import http_input_flags
 
@@ -55,9 +61,41 @@ _DECODED_RE = re.compile(
 _PROBLEM_RE = re.compile(rb"\[(?:warning|error|fatal|panic)\]")
 _STDERR_TAIL_LINES = 200
 
+# Extensions read_mp4_frame_index parses, for the notch check on a source.
+_INDEXED_EXTENSIONS = frozenset({".mp4", ".mov", ".m4v"})
+
 # The spec names a camera folder's primary video ``video.<ext>``; derivatives of
 # any other primary take its stem, so two primaries in one folder cannot collide.
 _SPEC_PRIMARY_STEM = "video"
+
+
+class NotchedTimelineWarning(UserWarning):
+    """The source's presentation timeline steps by more than a frame period, and the output will too."""
+
+
+def _warn_if_notched(input_path: Path) -> None:
+    """Warn with :class:`NotchedTimelineWarning` if an MP4 or MOV source's timeline has notches.
+
+    Costs one ``moov`` read.  A file the index cannot read is not warned about:
+    ffmpeg may still transcode it.
+    """
+    if input_path.suffix.lower() not in _INDEXED_EXTENSIONS:
+        return
+    try:
+        notches = read_mp4_frame_index(input_path).timeline_notches()
+    except (OSError, ValueError):
+        return
+    if notches.pts_after.size == 0:
+        return
+    first = int(notches.pts_after[0]) + 1
+    warnings.warn(
+        f"{input_path}: presentation timeline steps by more than one frame period {notches.pts_after.size} time(s), "
+        f"first after frame {first}, counting from 1, so the output keeps the gaps. A concat seam leaves them "
+        "with no frame missing, and a dropped exposure may too. Pass normalize_cfr=True to close them, or "
+        "restamp_uniform the source first.",
+        NotchedTimelineWarning,
+        stacklevel=3,
+    )
 
 
 class FfmpegError(subprocess.CalledProcessError):
@@ -362,7 +400,8 @@ def transcode_video(
         ``ReferenceTime`` column, decimated as the preview is, is written to
         ``preview_metadata.parquet`` (or ``<stem>_preview_metadata.parquet``)
         beside *output_path*, which the spec requires of every preview.  It is read before encoding, so a missing
-        file, column or the ``parquet`` extra fails fast.  See
+        file, column or the ``parquet`` extra fails fast.  Values are copied
+        as recorded, flaws included.  See
         :mod:`aind_video_utils.preview_metadata`.
     poster : bool
         When ``True``, also write ``poster.jpg`` (or ``<stem>_poster.jpg``)
@@ -420,12 +459,25 @@ def transcode_video(
         ``frame_rate`` is not positive.
     ImportError
         If ``metadata_csv`` is given without the ``parquet`` extra installed.
+
+    Warns
+    -----
+    NotchedTimelineWarning
+        If ``normalize_cfr`` is off and an MP4 or MOV source's presentation
+        timeline steps by more than one frame period, which the output keeps.
+    PreviewTimingWarning
+        If ``CameraFrameNumber`` in ``metadata_csv`` skips or steps backwards,
+        so the recorded times the preview's metadata copies may need repair.
     """
     if metadata_csv is not None and preview_fps is None:
         raise ValueError("metadata_csv describes a preview's frames, so it needs preview_fps")
     if threads is not None and threads < 1:
         raise ValueError(f"threads must be at least 1, got {threads}")
     frame_metadata = read_frame_metadata(metadata_csv) if metadata_csv is not None else None
+    if metadata_csv is not None:
+        warn_if_frames_dropped(metadata_csv)
+    if not normalize_cfr:
+        _warn_if_notched(input_path)
     effective, factor = _effective_profile(
         profile,
         input_path,
