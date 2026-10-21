@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from aind_video_utils._rawvideo import pix_format_bit_depth
+from aind_video_utils.acquisition_timing import FrameTiming, RepairedFrameTimes, read_frame_timing, repair_frame_times
 from aind_video_utils.color_spaces import linear_to_rec_709_trc, luma_range, rec_709_trc_to_linear
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
@@ -54,8 +55,10 @@ __all__ = [
     "EditListEntry",
     "EncodingProfile",
     "FfmpegError",
+    "FrameTiming",
     "Mp4FrameIndex",
     "RangeOverride",
+    "RepairedFrameTimes",
     "TimelineNotches",
     "__version__",
     "extract_frame_by_index",
@@ -73,8 +76,10 @@ __all__ = [
     "preview_decimation",
     "preview_metadata_path",
     "probe",
+    "read_frame_timing",
     "read_mp4_frame_index",
     "rec_709_trc_to_linear",
+    "repair_frame_times",
     "restamp_uniform",
     "transcode_video",
     "with_poster",

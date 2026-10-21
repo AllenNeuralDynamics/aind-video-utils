@@ -255,6 +255,27 @@ aind-mp4-timeline notches --list videos.txt -j 16      # one source per line
 aind-mp4-timeline restamp bottom_camera.mp4 /scratch/bottom_camera.mp4
 ```
 
+### Acquisition Timing
+
+Each camera's per-frame CSV, the file standard's `metadata.csv` or the legacy
+headerless `<camera>.csv`, reads into one table. `repair_frame_times()` corrects
+what the recording got wrong and names each repair it applies, so the caller can
+record it: a trigger time out of order with both its neighbours, frames paired
+with triggers by arrival so that each dropped frame shifts every later time,
+and a frame counter that steps backwards and so counts no exposures.
+
+```python
+from aind_video_utils import read_frame_timing, repair_frame_times
+
+table = read_frame_timing(Path("bottom_camera.csv"))
+times = repair_frame_times(table.reference_time, table.frame_number)
+times.time, times.dropped_before, times.repairs  # e.g. ("zip_pairing_repaired",)
+```
+
+Whether frames were paired by arrival is detected from the times at the
+counter's skips; pass `pairing="by_arrival"` or `"by_exposure"` to state it, as
+you must when the skips fit neither.
+
 ### QC CLI
 
 With the `plotting` extra installed, the `aind-video-qc` command is available:

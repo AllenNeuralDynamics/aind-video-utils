@@ -59,6 +59,7 @@ Under `src/aind_video_utils/`:
 - `mp4_index.py` parses an MP4's sample tables from the `moov` without ffmpeg, locally or by HTTP range reads.
   `restamp.py` repairs a notched timeline with ffmpeg's `setts` bitstream filter and verifies the result from the
   output's own index, since a timing fault leaves the pixels intact.
+- `acquisition_timing.py` reads a camera's per-frame timing CSV and repairs its recorded times.
 - `preview_metadata.py` writes `preview_metadata.parquet` with pyarrow.
 - `probe.py` wraps ffprobe. `frames.py` extracts frames, dispatching on pixel format: YUV through the `colorspace`
   filter, GBR through `zscale`. `_rawvideo.py` parses ffmpeg's raw output. `color_spaces.py` has the Rec.709 transfer
