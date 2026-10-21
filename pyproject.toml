@@ -32,6 +32,7 @@ Changelog = "https://github.com/AllenNeuralDynamics/aind-video-utils/blob/main/C
 [project.scripts]
 aind-video-qc = "aind_video_utils.scripts.video_qc_cli:main"
 aind-transcode = "aind_video_utils.scripts.transcode_cli:main"
+aind-mp4-timeline = "aind_video_utils.scripts.mp4_timeline_cli:main"
 
 [dependency-groups]
 types = ["mypy"]
