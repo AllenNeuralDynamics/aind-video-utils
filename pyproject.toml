@@ -57,7 +57,7 @@ pydocstyle = { convention = "numpy" }
 
 [tool.codespell]
 skip = ".git,*.pdf,*.svg,./bonsai,*.bonsai,uv.lock"
-ignore-words-list = "nd"
+ignore-words-list = "nd,setts"
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --tb=short --cov=src --cov-report=term-missing --cov-fail-under=0"
