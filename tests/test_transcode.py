@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import subprocess
+import warnings
 from fractions import Fraction
 from pathlib import Path
 
@@ -924,6 +925,32 @@ def test_normalize_cfr_keeps_every_frame_of_an_mp4_with_a_timestamp_gap(tmp_path
     notches = out.timeline_notches()
     assert notches.is_uniform
     assert Fraction(out.media_timescale, notches.period) == 500
+
+
+@ffmpeg_required
+def test_a_notched_mp4_source_warns_unless_it_is_restamped(tmp_path: Path) -> None:
+    from aind_video_utils.transcode import NotchedTimelineWarning
+
+    src = tmp_path / "gapped.mp4"
+    _lossless_testsrc(src, 60, "-vf", "select='not(between(n,30,31))'", "-fps_mode", "passthrough")
+    profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    with pytest.warns(NotchedTimelineWarning, match="first after frame 30, counting from 1"):
+        transcode_video(src, tmp_path / "kept.mp4", profile=profile)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NotchedTimelineWarning)
+        transcode_video(src, tmp_path / "closed.mp4", profile=profile, normalize_cfr=True)
+
+
+@ffmpeg_required
+def test_a_uniform_mp4_source_raises_no_notch_warning(tmp_path: Path) -> None:
+    from aind_video_utils.transcode import NotchedTimelineWarning
+
+    src = tmp_path / "clean.mp4"
+    _lossless_testsrc(src, 30)
+    profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NotchedTimelineWarning)
+        transcode_video(src, tmp_path / "out.mp4", profile=profile)
 
 
 @ffmpeg_required

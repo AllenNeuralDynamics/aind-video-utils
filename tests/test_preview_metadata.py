@@ -184,3 +184,31 @@ def test_poster_counts_packets_when_the_source_records_no_duration(monkeypatch, 
     seen, graph = _poster_run(monkeypatch, tmp_path, duration=None)
     assert seen == [False, True]
     assert "select=eq(n\\,45)" in graph
+
+
+def test_a_counter_that_skips_warns_that_the_times_may_need_repair(tmp_path):
+    from aind_video_utils.preview_metadata import PreviewTimingWarning
+
+    csv = tmp_path / "metadata.csv"
+    csv.write_text("ReferenceTime,CameraFrameNumber,CameraFrameTime\n1.0,0,0\n1.002,1,2\n1.004,4,4\n")
+    with pytest.warns(PreviewTimingWarning, match="skips 1 time"):
+        write_preview_metadata(csv, tmp_path / "p.parquet", 2)
+    # Copied as recorded, not repaired.
+    assert pq.read_table(tmp_path / "p.parquet").column("ReferenceTime").to_pylist() == [1.0, 1.004]
+
+
+def test_a_counter_that_steps_backwards_warns(tmp_path):
+    from aind_video_utils.preview_metadata import PreviewTimingWarning
+
+    csv = tmp_path / "metadata.csv"
+    csv.write_text("ReferenceTime,CameraFrameNumber,CameraFrameTime\n1.0,5,0\n1.002,3,2\n")
+    with pytest.warns(PreviewTimingWarning, match="steps backwards"):
+        write_preview_metadata(csv, tmp_path / "p.parquet", 2)
+
+
+def test_a_contiguous_counter_or_none_raises_no_warning(tmp_path, recwarn):
+    write_preview_metadata(_metadata_csv(tmp_path / "metadata.csv", 45), tmp_path / "p.parquet", 20)
+    bare = tmp_path / "bare.csv"
+    bare.write_text("ReferenceTime\n1.0\n1.002\n")
+    write_preview_metadata(bare, tmp_path / "q.parquet", 2)
+    assert not recwarn.list
