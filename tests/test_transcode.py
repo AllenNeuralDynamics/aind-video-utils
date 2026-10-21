@@ -677,12 +677,23 @@ def _patch_ffmpeg(
     stderr_bytes: bytes = _CLEAN_SUMMARY,
     returncode: int = 0,
     rate: str | None = "500/1",
+    time_base: str | None = None,
+    format_name: str = "avi",
 ):
-    """Fake out probe() and subprocess.Popen; return the list capturing argv."""
+    """Fake out probe() and subprocess.Popen; return the list capturing argv.
+
+    The stream's ``time_base`` defaults to the inverse of *rate*, as an AVI's is.
+    """
     captured: list = []
+    if time_base is None and rate is not None:
+        num, den = rate.split("/")
+        time_base = f"{den}/{num}"
+    stream = {"pix_fmt": "gbrp", "color_space": "gbr", "color_range": "pc", "r_frame_rate": rate}
+    if time_base is not None:
+        stream["time_base"] = time_base
 
     def fake_probe(_path):
-        return {"streams": [{"pix_fmt": "gbrp", "color_space": "gbr", "color_range": "pc", "r_frame_rate": rate}]}
+        return {"streams": [stream], "format": {"format_name": format_name}}
 
     def fake_popen(cmd, stdout=None, stderr=None):
         return _FakePopen(
@@ -719,10 +730,34 @@ def test_normalize_cfr_off_omits_setpts(monkeypatch, tmp_path):
     assert "setpts" not in _vf_value(captured[0])
 
 
-def test_normalize_cfr_raises_without_readable_rate(monkeypatch, tmp_path):
+def test_normalize_cfr_takes_an_avis_rate_from_its_time_base_not_r_frame_rate(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate="1000/1", time_base="1/500")
+    transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
+    assert _vf_value(captured[0]).startswith("setpts=N/(500/1)/TB,")
+
+
+def test_normalize_cfr_uses_an_explicit_frame_rate(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, format_name="matroska,webm")
+    transcode_video(tmp_path / "in.mkv", tmp_path / "out.mp4", normalize_cfr=True, frame_rate=Fraction(60000, 1001))
+    assert _vf_value(captured[0]).startswith("setpts=N/(60000/1001)/TB,")
+
+
+def test_normalize_cfr_refuses_a_container_it_cannot_measure(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, format_name="matroska,webm")
+    with pytest.raises(RuntimeError, match="pass frame_rate="):
+        transcode_video(tmp_path / "in.mkv", tmp_path / "out.mp4", normalize_cfr=True)
+
+
+def test_normalize_cfr_refuses_an_avi_without_a_time_base(monkeypatch, tmp_path):
     _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, rate=None)
-    with pytest.raises(RuntimeError, match="no readable r_frame_rate"):
+    with pytest.raises(RuntimeError, match="cannot be measured"):
         transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True)
+
+
+def test_frame_rate_must_be_positive(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    with pytest.raises(ValueError, match="frame_rate must be positive"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "out.mp4", normalize_cfr=True, frame_rate=0)
 
 
 def test_normalize_cfr_is_off_by_default(monkeypatch, tmp_path):
@@ -855,6 +890,40 @@ def test_transcode_video_preserves_frame_count_and_zero_start(tmp_path: Path) ->
 
     assert _count(dst) == _count(src) == 6
     assert float(start) == 0.0
+
+
+def _lossless_testsrc(path: Path, n_frames: int, *extra: str, rate: int = 500) -> None:
+    """Write *n_frames* of lossless h264 testsrc; *extra* goes before the output, so a select counts kept frames."""
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size=64x48:rate={rate}",
+            "-frames:v", str(n_frames), *extra, "-c:v", "libx264", "-qp", "0", "-preset", "ultrafast",
+            str(path),
+        ],
+        check=True,
+    )  # fmt: skip
+
+
+@ffmpeg_required
+def test_normalize_cfr_keeps_every_frame_of_an_mp4_with_a_timestamp_gap(tmp_path: Path) -> None:
+    """A PTS gap doubles ffprobe's r_frame_rate; restamping at that rate lost half the frames."""
+    from aind_video_utils.mp4_index import read_mp4_frame_index
+
+    src = tmp_path / "gapped.mp4"
+    dst = tmp_path / "dst.mp4"
+    _lossless_testsrc(src, 2997, "-vf", "select='not(between(n,1500,1502))'", "-fps_mode", "passthrough")
+    source_index = read_mp4_frame_index(src)
+    assert source_index.n_samples == 2997
+    assert not source_index.timeline_notches().is_uniform
+
+    profile = OFFLINE_8BIT.replace(codec_params=("-preset", "ultrafast", "-crf", "18"))
+    transcode_video(src, dst, profile=profile, normalize_cfr=True)
+
+    out = read_mp4_frame_index(dst)
+    assert out.n_samples == 2997
+    notches = out.timeline_notches()
+    assert notches.is_uniform
+    assert Fraction(out.media_timescale, notches.period) == 500
 
 
 @ffmpeg_required

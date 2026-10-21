@@ -12,6 +12,7 @@ import threading
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +27,9 @@ from aind_video_utils.encoding import (
     with_preview,
     with_setparams,
 )
+from aind_video_utils.mp4_index import read_mp4_frame_index
 from aind_video_utils.preview_metadata import preview_metadata_path, read_frame_metadata, write_decimated
-from aind_video_utils.probe import get_duration_seconds, get_exact_nb_frames, get_r_frame_rate, probe
+from aind_video_utils.probe import ProbeDict, get_duration_seconds, get_exact_nb_frames, probe
 from aind_video_utils.utils import http_input_flags
 
 VIDEO_EXTENSIONS: frozenset[str] = frozenset(
@@ -83,6 +85,31 @@ class _FrameCounts:
     encoded: dict[int, int] = field(default_factory=dict)
 
 
+def _restamp_rate(input_path: Path, probe_json: ProbeDict, frame_rate: Fraction | None) -> Fraction:
+    """Return the rate ``normalize_cfr`` restamps *input_path* at.
+
+    Never ffprobe's ``r_frame_rate``: it is guessed from the timestamp steps, and
+    a gap of one frame slot doubles it.  An AVI's time base is its frame period,
+    since AVI timestamps count frames.
+    """
+    if frame_rate is not None:
+        if frame_rate <= 0:
+            raise ValueError(f"frame_rate must be positive, got {frame_rate}")
+        return frame_rate
+    formats = set(probe_json.get("format", {}).get("format_name", "").split(","))
+    if "mp4" in formats or "mov" in formats:
+        index = read_mp4_frame_index(input_path)
+        return Fraction(index.media_timescale, index.frame_period)
+    if "avi" in formats:
+        num, _, den = probe_json["streams"][0].get("time_base", "").partition("/")
+        if num.isdigit() and den.isdigit() and int(num) > 0:
+            return Fraction(int(den), int(num))
+    raise RuntimeError(
+        f"normalize_cfr=True but the frame rate of {input_path} cannot be measured from its container; "
+        "pass frame_rate= with the acquisition's nominal rate."
+    )
+
+
 def _effective_profile(
     profile: EncodingProfile,
     input_path: Path,
@@ -90,6 +117,7 @@ def _effective_profile(
     auto_fix_colorspace: bool,
     range_override: RangeOverride | None,
     normalize_cfr: bool,
+    frame_rate: Fraction | None,
     preview_fps: float | None,
     poster: bool,
     poster_at_seconds: float | None,
@@ -120,15 +148,8 @@ def _effective_profile(
         effective = with_setparams(profile, probe_json, range_override=range_override)
     if normalize_cfr:
         assert probe_json is not None
-        rate = get_r_frame_rate(probe_json)
-        if rate is None:
-            raise RuntimeError(
-                f"normalize_cfr=True but {input_path} has no readable r_frame_rate; "
-                "pass normalize_cfr=False for variable-frame-rate sources."
-            )
-        num, den = rate
-        setpts = f"setpts=N/({num}/{den})/TB"
-        effective = effective.prepend_conditioning(setpts)
+        rate = _restamp_rate(input_path, probe_json, frame_rate)
+        effective = effective.prepend_conditioning(f"setpts=N/({rate.numerator}/{rate.denominator})/TB")
     factor = None
     if preview_fps is not None:
         assert probe_json is not None
@@ -269,6 +290,7 @@ def transcode_video(
     auto_fix_colorspace: bool = True,
     range_override: RangeOverride | None = None,
     normalize_cfr: bool = False,
+    frame_rate: Fraction | int | None = None,
     fail_on_frame_drop: bool = True,
     preview_fps: float | None = None,
     metadata_csv: Path | None = None,
@@ -305,15 +327,21 @@ def transcode_video(
         sources that are TV-range encoded.  Ignored when
         ``auto_fix_colorspace=False``.
     normalize_cfr : bool
-        When ``True``, probe the source frame rate and add to the profile's
-        conditioning a ``setpts=N/(num/den)/TB`` filter that re-stamps every
-        frame's presentation timestamp from its display-order index at the
-        source's base frame rate, starting at PTS 0.  Legacy h264-in-AVI
-        sources need it: AVI cannot store composition offsets, so ffmpeg
-        reconstructs non-monotonic timestamps for some frames and drops them.
-        Off by default because it rewrites timing, which only sources with
-        broken timestamps call for.  Requires a readable ``r_frame_rate``; leave
-        it off for variable-frame-rate input whose timing must survive.
+        When ``True``, add to the profile's conditioning a
+        ``setpts=N/(num/den)/TB`` filter that re-stamps every frame's
+        presentation timestamp from its display-order index at the source's
+        frame rate, starting at PTS 0.  Legacy h264-in-AVI sources need it: AVI
+        cannot store composition offsets, so ffmpeg reconstructs non-monotonic
+        timestamps for some frames and drops them.  Off by default because it
+        rewrites timing.  Restamping closes any gap in the source's timestamps,
+        so where a gap marked a real dropped exposure, the output no longer
+        records it; that is right when the frame times live in ``metadata.csv``,
+        as AIND's do, but it is the caller's choice.
+    frame_rate : Fraction | int | None
+        The rate ``normalize_cfr`` restamps at, such as the acquisition's
+        nominal rate.  Without it the rate is measured: for an MP4 or MOV, the
+        most common step between its sorted presentation timestamps; for an
+        AVI, its time base.  Other containers need it.
     fail_on_frame_drop : bool
         When ``True`` (the default), raise :class:`RuntimeError` unless the
         primary output holds exactly as many frames as ffmpeg decoded from the
@@ -382,13 +410,14 @@ def transcode_video(
     RuntimeError
         If ``fail_on_frame_drop`` is set and the primary output's frame count
         differs from the decoded source's, or ffmpeg reported decode errors or
-        no frame totals; if ``normalize_cfr`` is set but the source has no
-        readable base frame rate; if ``metadata_csv`` has a row count other
+        no frame totals; if ``normalize_cfr`` is set without ``frame_rate`` on a
+        source whose rate cannot be measured; if ``metadata_csv`` has a row count other
         than the primary output's frame count; or if ffmpeg exited zero
         without writing a frame to a derivative.
     ValueError
         If ``metadata_csv`` is given without ``preview_fps``, or lacks the
-        ``ReferenceTime`` column, or ``threads`` is less than 1.
+        ``ReferenceTime`` column, or ``threads`` is less than 1, or
+        ``frame_rate`` is not positive.
     ImportError
         If ``metadata_csv`` is given without the ``parquet`` extra installed.
     """
@@ -403,6 +432,7 @@ def transcode_video(
         auto_fix_colorspace=auto_fix_colorspace,
         range_override=range_override,
         normalize_cfr=normalize_cfr,
+        frame_rate=Fraction(frame_rate) if frame_rate is not None else None,
         preview_fps=preview_fps,
         poster=poster,
         poster_at_seconds=poster_at_seconds,
