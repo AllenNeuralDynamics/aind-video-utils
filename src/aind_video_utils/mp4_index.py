@@ -525,6 +525,15 @@ def _locate_and_read_moov(source: _ByteSource) -> bytes:
         offset += size
 
 
+def _read_moov(path: str | Path) -> bytes:
+    """Return the ``moov`` box body of a local file or HTTP(S) URL."""
+    source = _open_source(path)
+    try:
+        return _locate_and_read_moov(source)
+    finally:
+        source.close()
+
+
 def _box_version(buf: bytes, body_start: int) -> int:
     """Return the version byte of a full box."""
     return buf[body_start]
@@ -737,11 +746,7 @@ def read_mp4_frame_index(path: str | Path) -> Mp4FrameIndex:
         (e.g. ``stts``/``stsc`` sample counts disagree with ``stsz``), or is a
         URL whose server does not support range requests.
     """
-    source = _open_source(path)
-    try:
-        moov = _locate_and_read_moov(source)
-    finally:
-        source.close()
+    moov = _read_moov(path)
     stbl_start, stbl_end, timescale, duration, edits = _find_video_stbl(moov)
 
     mvhd = _find_child(moov, 0, len(moov), b"mvhd")

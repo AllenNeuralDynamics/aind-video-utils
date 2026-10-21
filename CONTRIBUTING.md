@@ -56,12 +56,16 @@ Under `src/aind_video_utils/`:
 - `transcode.py` runs one ffmpeg process from a profile. Its frame check compares the primary's frames encoded with the
   source's frames decoded, both parsed from ffmpeg's end-of-run summary at `-loglevel level+verbose`; stderr is read on
   a thread so the pipe never stalls ffmpeg.
+- `mp4_index.py` parses an MP4's sample tables from the `moov` without ffmpeg, locally or by HTTP range reads.
+  `restamp.py` repairs a notched timeline with ffmpeg's `setts` bitstream filter and verifies the result from the
+  output's own index, since a timing fault leaves the pixels intact.
 - `preview_metadata.py` writes `preview_metadata.parquet` with pyarrow.
 - `probe.py` wraps ffprobe. `frames.py` extracts frames, dispatching on pixel format: YUV through the `colorspace`
   filter, GBR through `zscale`. `_rawvideo.py` parses ffmpeg's raw output. `color_spaces.py` has the Rec.709 transfer
   math. `utils.py` adds `-reconnect` flags for URL inputs, and every ffmpeg or ffprobe call that takes a path uses it.
 - `video_qc.py` and `plotting.py` draw QC figures.
-- `scripts/` holds the `aind-transcode` and `aind-video-qc` CLIs, built on pydantic-settings.
+- `scripts/` holds the CLIs: `aind-transcode`, built on pydantic-settings, and `aind-video-qc` and
+  `aind-mp4-timeline`, on argparse.
 
 The core depends only on numpy. The CLIs, the QC figures and the Parquet writer sit behind the `transcode`, `plotting`
 and `parquet` extras, so a module that needs pydantic-settings, rich, matplotlib, opencv or pyarrow either lives in an

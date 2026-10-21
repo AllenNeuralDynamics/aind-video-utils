@@ -32,6 +32,7 @@ from aind_video_utils.probe import (
     get_video_range_info,
     probe,
 )
+from aind_video_utils.restamp import restamp_uniform
 from aind_video_utils.transcode import VIDEO_EXTENSIONS, FfmpegError, transcode_video
 
 try:
@@ -74,6 +75,7 @@ __all__ = [
     "probe",
     "read_mp4_frame_index",
     "rec_709_trc_to_linear",
+    "restamp_uniform",
     "transcode_video",
     "with_poster",
     "with_preview",

@@ -213,6 +213,7 @@ aind-transcode videos/ --preset veryfast              # override speed
 aind-transcode videos/ --crf 20 --preset veryfast     # override quality + speed
 aind-transcode videos/ --no_auto_fix_colorspace true  # skip setparams probing
 aind-transcode videos/ --normalize_cfr true           # legacy h264-in-AVI sources
+aind-transcode videos/ --normalize_cfr true --frame_rate 500  # a container without a measurable rate
 aind-transcode videos/ --jobs 4                       # parallel workers
 ```
 
@@ -223,6 +224,35 @@ input = ["videos/"]
 output_dir = "transcoded"
 profile = "offline-8bit"
 overwrite = false
+```
+
+### MP4 Timelines
+
+An MP4 stitched from separately encoded chunks with `concat -c copy` can carry
+notches: every frame after a seam is stamped a few frame periods late, so a
+reader that seeks to frame `k` at `k / fps`, as NVIDIA DALI does, lands on the
+wrong frame. `read_mp4_frame_index()` reads the sample tables from the `moov`
+alone, locally or over HTTP, and `timeline_notches()` reports where the
+timestamps step by anything other than one frame period. `restamp_uniform()`
+removes the notches without re-encoding and checks the result before returning
+it.
+
+```python
+from pathlib import Path
+
+from aind_video_utils import read_mp4_frame_index, restamp_uniform
+
+notches = read_mp4_frame_index("bottom_camera.mp4").timeline_notches()
+if not notches.is_uniform:
+    restamp_uniform("bottom_camera.mp4", Path("/scratch/bottom_camera.mp4"))
+```
+
+The `aind-mp4-timeline` command needs no extra:
+
+```bash
+aind-mp4-timeline notches a.mp4 https://host/b.mp4 s3://aind-open-data/.../c.mp4 -o notches.csv
+aind-mp4-timeline notches --list videos.txt -j 16      # one source per line
+aind-mp4-timeline restamp bottom_camera.mp4 /scratch/bottom_camera.mp4
 ```
 
 ### QC CLI
