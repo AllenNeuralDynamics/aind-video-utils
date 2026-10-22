@@ -39,11 +39,16 @@ def _index(pts: list[int], dts: list[int], edits: tuple[EditListEntry, ...] = ()
 
 
 def test_setts_expression_moves_frames_after_each_notch_back_by_its_excess():
-    # Notches of 2 slots after display index 1 and 1 slot after index 3; media_time 64.
+    # Notches of 2 slots after display index 1 and 1 slot after index 3.
     pts = [64, 96, 192, 224, 288]
     index = _index(pts, [0, 32, 64, 96, 128], edits=(EditListEntry(1, 64, 1.0),))
     expr = _setts_expression(index, index.timeline_notches())
-    assert expr == "setts=dts=STARTDTS+N*32:pts=PTS-64*gte(PTS\\,128)-32*gte(PTS\\,224)"
+    assert expr == "setts=dts=STARTDTS+N*32:pts=PTS-64*gte(PTS-STARTPTS\\,128)-32*gte(PTS-STARTPTS\\,224)"
+
+
+def test_check_repairable_accepts_a_leading_empty_edit():
+    index = _index([64, 96, 128], [0, 32, 64], edits=(EditListEntry(2, -1, 1.0), EditListEntry(1, 64, 1.0)))
+    _check_repairable(index, index.timeline_notches())
 
 
 def test_setts_expression_without_notches_keeps_pts():
@@ -57,6 +62,13 @@ def test_setts_expression_without_notches_keeps_pts():
         ([0, 32, 64], [0, 32, 64], (EditListEntry(1, 0, 1.0), EditListEntry(1, 0, 1.0)), "2 edits"),
         ([0, 32, 64], [0, 32, 64], (EditListEntry(1, 0, 2.0),), "non-unit rate"),
         ([0, 32, 64], [0, 32, 64], (EditListEntry(1, -1, 1.0),), "empty"),
+        ([0, 32, 64], [0, 32, 64], (EditListEntry(1, 0, 1.0), EditListEntry(1, -1, 1.0)), "2 edits"),
+        (
+            [0, 32, 64],
+            [0, 32, 64],
+            (EditListEntry(1, -1, 1.0), EditListEntry(1, 0, 1.0), EditListEntry(1, 0, 1.0)),
+            "3 edits",
+        ),
         ([0, 32, 64, 96], [0, 32, 32, 64], (), "DTS step backwards"),
         ([0, 32, 32, 64, 96], [0, 1, 2, 3, 4], (), "share a PTS"),
         ([0, 32, 64, 112, 144], [0, 32, 64, 96, 128], (), "not a whole number"),
@@ -146,6 +158,20 @@ def test_restamp_keeps_tags_and_colour_description(seamed, tmp_path):
     assert probe(out)["format"]["tags"]["source_s3"] == "s3://bucket/key"
     assert restamp_mod._has_colr(_read_moov(out))
     assert _uses_mdta_keys(_read_moov(out))
+
+
+@ffmpeg_required
+def test_restamp_drops_a_leading_empty_edit(clean, seamed, tmp_path):
+    late = tmp_path / "late.mp4"
+    _ffmpeg(
+        "-i", str(seamed), "-c", "copy", "-map_metadata", "0", "-bsf:v", f"setts=pts=PTS+{PERIOD}:dts=DTS+{PERIOD}",
+        "-video_track_timescale", "16000", "-movflags", "+faststart+write_colr+use_metadata_tags", str(late),
+    )  # fmt: skip
+    assert read_mp4_frame_index(late).edits[0].media_time == -1
+    fixed, original = read_mp4_frame_index(restamp_uniform(late, tmp_path / "fixed.mp4")), read_mp4_frame_index(clean)
+    assert np.array_equal(fixed.pts, original.pts)
+    assert np.array_equal(fixed.dts, original.dts)
+    assert fixed.edits == original.edits
 
 
 @ffmpeg_required

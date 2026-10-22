@@ -239,7 +239,7 @@ wrong frame. `read_mp4_frame_index()` reads the sample tables from the `moov`
 alone, locally or over HTTP, and `timeline_notches()` reports where the
 timestamps step by anything other than one frame period. `restamp_uniform()`
 removes the notches without re-encoding and checks the result before returning
-it. `transcode_video()` warns with `NotchedTimelineWarning` when an MP4 or MOV
+it; a leading empty edit, which only delays the first frame, is dropped. `transcode_video()` warns with `NotchedTimelineWarning` when an MP4 or MOV
 source is notched, since the output keeps the notches unless `normalize_cfr=True`.
 
 ```python
