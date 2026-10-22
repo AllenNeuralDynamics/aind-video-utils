@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from aind_video_utils.mp4_index import (
+    EditListEntry,
     Mp4FrameIndex,
     TimelineNotches,
     _find_child,
@@ -48,15 +49,23 @@ _STREAM_FIELDS = (
 _VISUAL_SAMPLE_ENTRY_HEADER = 78
 
 
+def _presenting_edits(index: Mp4FrameIndex) -> tuple[EditListEntry, ...]:
+    """Return the edit list past a leading empty edit, which only delays the start."""
+    edits = index.edits
+    return edits[1:] if len(edits) > 1 and edits[0].media_time == -1 else edits
+
+
 def _media_time(index: Mp4FrameIndex) -> int:
-    return index.edits[0].media_time if index.edits else 0
+    edits = _presenting_edits(index)
+    return edits[0].media_time if edits else 0
 
 
 def _check_repairable(index: Mp4FrameIndex, notches: TimelineNotches) -> None:
     """Raise ValueError unless :func:`restamp_uniform` can repair *index* exactly."""
-    if len(index.edits) > 1:
+    edits = _presenting_edits(index)
+    if len(edits) > 1:
         raise ValueError(f"{len(index.edits)} edits in the edit list; only a single edit can be restamped")
-    if index.edits and (index.edits[0].media_rate != 1.0 or index.edits[0].media_time < 0):
+    if edits and (edits[0].media_rate != 1.0 or edits[0].media_time < 0):
         raise ValueError("the edit is empty or plays at a non-unit rate")
     if (np.diff(index.dts) <= 0).any():
         raise ValueError("DTS step backwards or repeat")
@@ -72,12 +81,13 @@ def _check_repairable(index: Mp4FrameIndex, notches: TimelineNotches) -> None:
 def _setts_expression(index: Mp4FrameIndex, notches: TimelineNotches) -> str:
     """Build the ``setts`` filter that removes *notches*.
 
-    Thresholds are in ffmpeg's timestamps, which have the edit's ``media_time``
-    subtracted from the moov's.
+    Thresholds count from the first frame, since ffmpeg shifts its input by a
+    start time that the edit list moves.
     """
-    first_after = np.sort(index.pts)[notches.pts_after + 1] - _media_time(index)
+    sorted_pts = np.sort(index.pts)
+    first_after = sorted_pts[notches.pts_after + 1] - sorted_pts[0]
     excess = notches.pts_steps - notches.period
-    shifts = "".join(f"-{int(e)}*gte(PTS\\,{int(t)})" for e, t in zip(excess, first_after, strict=True))
+    shifts = "".join(f"-{int(e)}*gte(PTS-STARTPTS\\,{int(t)})" for e, t in zip(excess, first_after, strict=True))
     return f"setts=dts=STARTDTS+N*{notches.period}:pts=PTS{shifts}"
 
 
@@ -180,12 +190,15 @@ def restamp_uniform(src: str | Path, dst: Path) -> Path:
     returned: same samples, sizes, keyframes and display order; PTS and DTS
     both on the grid, PTS never before DTS; one edit with the same
     ``media_time``, lasting the frame count times the period; and the same
-    container and stream tags and colour description.  ffmpeg writes to a
-    temporary file beside *dst*, so *dst* never holds an unverified repair.
+    container and stream tags and colour description.  A leading empty edit,
+    which only delays the first frame, is dropped, so *dst* starts at 0.  ffmpeg
+    writes to a temporary file beside *dst*, so *dst* never holds an unverified
+    repair.
 
     Erasing a notch is right when the frame times live elsewhere, as in AIND's
     ``metadata.csv``.  Where a gap in the PTS marks a real dropped exposure, the
-    repair erases that record too.
+    repair erases that record too: match frames to timing rows with
+    :func:`~aind_video_utils.acquisition_timing.video_frame_rows` first.
 
     Parameters
     ----------
@@ -203,9 +216,10 @@ def restamp_uniform(src: str | Path, dst: Path) -> Path:
     Raises
     ------
     ValueError
-        If *src* has a stream besides its video, more than one edit, an empty
-        or non-unit-rate edit, DTS that step backwards, two frames sharing a
-        PTS, or a notch that is not a whole number of frame periods.
+        If *src* has a stream besides its video, more than one edit after any
+        leading empty one, an empty or non-unit-rate edit, DTS that step
+        backwards, two frames sharing a PTS, or a notch that is not a whole
+        number of frame periods.
     FfmpegError
         If ffmpeg fails.
     RuntimeError
