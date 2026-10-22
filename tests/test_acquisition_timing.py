@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aind_video_utils.acquisition_timing import read_frame_timing, repair_frame_times
+from aind_video_utils.acquisition_timing import read_frame_timing, repair_frame_times, video_frame_rows
+from aind_video_utils.mp4_index import Mp4FrameIndex
 
 PERIOD = 0.002  # seconds between triggers at 500 Hz
 
@@ -143,3 +144,44 @@ def test_integer_ticks_extrapolate_to_integers():
 def test_malformed_input_is_refused(times, counter, match):
     with pytest.raises(ValueError, match=match):
         repair_frame_times(times, counter)
+
+
+def _video(pts: list[int]) -> Mp4FrameIndex:
+    """An all-intra index, 32 ticks a frame, with *pts* in display order."""
+    n = len(pts)
+    return Mp4FrameIndex(
+        media_timescale=16000,
+        media_duration=0,
+        movie_timescale=1000,
+        dts=np.array(pts, dtype=np.int64),
+        pts=np.array(pts, dtype=np.int64),
+        is_keyframe=np.ones(n, dtype=np.bool_),
+        byte_offset=np.zeros(n, dtype=np.int64),
+        size=np.ones(n, dtype=np.int64),
+        edits=(),
+    )
+
+
+def test_frames_after_a_gap_skip_the_rows_lost_in_it():
+    # A step of 3 periods after frame 1 loses 2 frames, and of 2 after frame 3, 1.
+    video = _video([0, 32, 128, 160, 224, 256])
+    assert video_frame_rows(video, 9).tolist() == [0, 1, 4, 5, 7, 8]
+
+
+def test_a_notch_without_extra_rows_is_a_stamping_fault():
+    video = _video([0, 32, 128, 160])
+    assert video_frame_rows(video, 4).tolist() == [0, 1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("pts", "n_rows", "match"),
+    [
+        ([0, 32, 64], 2, "2 timing rows for 3 frames"),
+        ([0, 32, 64, 96], 6, "hold 0 lost frames"),
+        ([0, 32, 128, 160], 7, "hold 2 lost frames"),
+        ([0, 32, 112, 144, 176], 8, "not whole periods"),
+    ],
+)
+def test_rows_the_timeline_cannot_place_are_refused(pts, n_rows, match):
+    with pytest.raises(ValueError, match=match):
+        video_frame_rows(_video(pts), n_rows)

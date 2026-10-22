@@ -24,6 +24,9 @@ so a caller can record the provenance:
 - ``frame_counter_distrusted``: a counter that ever steps backwards is not
   counting exposures, so each frame keeps the time on its own row, and whether
   frames were dropped is unknown.
+
+A video can also hold fewer frames than its CSV has rows, when a transcode lost
+some.  :func:`video_frame_rows` gives each frame its row.
 """
 
 from __future__ import annotations
@@ -34,6 +37,8 @@ from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
+
+from aind_video_utils.mp4_index import Mp4FrameIndex
 
 Pairing = Literal["by_arrival", "by_exposure"]
 """How the acquiring workflow paired frames with trigger times.
@@ -262,3 +267,50 @@ def repair_frame_times(
     repaired[~known] = times[last] + (np.rint(offset) if np.issubdtype(times.dtype, np.integer) else offset)
     repairs.append("zip_pairing_repaired")
     return RepairedFrameTimes(repaired, dropped_before, tuple(repairs), pairing)
+
+
+def video_frame_rows(index: Mp4FrameIndex, n_rows: int) -> npt.NDArray[np.intp]:
+    """Return the timing-CSV row of each of a video's frames, in display order.
+
+    With one row per frame, frame k is row k, and any notch in the timeline is a
+    stamping fault such as a concat seam.  With more rows than frames, the frames
+    lost must be where the presentation steps by more than one period, a step of
+    n periods marking n - 1 of them, as transcoding h264 from AVI leaves it; the
+    rows of the frames after each gap skip the rows of those lost in it.
+
+    Parameters
+    ----------
+    index : Mp4FrameIndex
+        The video's sample index.
+    n_rows : int
+        Rows in the video's timing CSV.
+
+    Returns
+    -------
+    NDArray[np.intp]
+        One row index per frame, increasing.
+
+    Raises
+    ------
+    ValueError
+        If the CSV has fewer rows than the video has frames, or more than the
+        timeline's gaps account for: a frame lost at either end, or a gap that
+        is a seam rather than a loss, leaves nothing to show which rows to skip.
+    """
+    rows = np.arange(index.n_samples, dtype=np.intp)
+    surplus = n_rows - index.n_samples
+    if surplus == 0:
+        return rows
+    if surplus < 0:
+        raise ValueError(f"{n_rows} timing rows for {index.n_samples} frames")
+    notches = index.timeline_notches()
+    whole = (notches.pts_steps > notches.period) & (notches.pts_steps % notches.period == 0)
+    lost = np.where(whole, notches.pts_steps // notches.period - 1, 0)
+    if not whole.all() or int(lost.sum()) != surplus:
+        raise ValueError(
+            f"{surplus} more timing rows than frames, but the timeline's gaps hold {int(lost.sum())} lost frames"
+            + ("" if whole.all() else " and steps that are not whole periods")
+        )
+    for after, n_lost in zip(notches.pts_after, lost, strict=True):
+        rows[after + 1 :] += n_lost
+    return rows

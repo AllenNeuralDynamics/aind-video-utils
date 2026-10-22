@@ -281,6 +281,19 @@ Whether frames were paired by arrival is detected from the times at the
 counter's skips; pass `pairing="by_arrival"` or `"by_exposure"` to state it, as
 you must when the skips fit neither.
 
+A transcode of h264 from AVI can lose frames, leaving the CSV rows the video no
+longer has and a gap in its timeline where they were. `video_frame_rows()` gives
+each frame its row, skipping those lost in each gap, and refuses when the gaps
+do not account for every extra row. Read it before `restamp_uniform()`, which
+closes the gaps.
+
+```python
+from aind_video_utils import video_frame_rows
+
+rows = video_frame_rows(read_mp4_frame_index("bottom_camera.mp4"), table.n_frames)
+frame_times = times.time[rows]
+```
+
 ### QC CLI
 
 With the `plotting` extra installed, the `aind-video-qc` command is available:
