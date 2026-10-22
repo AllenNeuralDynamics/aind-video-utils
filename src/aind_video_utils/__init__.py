@@ -3,7 +3,13 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from aind_video_utils._rawvideo import pix_format_bit_depth
-from aind_video_utils.acquisition_timing import FrameTiming, RepairedFrameTimes, read_frame_timing, repair_frame_times
+from aind_video_utils.acquisition_timing import (
+    FrameTiming,
+    RepairedFrameTimes,
+    read_frame_timing,
+    repair_frame_times,
+    video_frame_rows,
+)
 from aind_video_utils.color_spaces import linear_to_rec_709_trc, luma_range, rec_709_trc_to_linear
 from aind_video_utils.encoding import (
     OFFLINE_8BIT,
@@ -89,6 +95,7 @@ __all__ = [
     "repair_frame_times",
     "restamp_uniform",
     "transcode_video",
+    "video_frame_rows",
     "with_poster",
     "with_preview",
     "with_setparams",
