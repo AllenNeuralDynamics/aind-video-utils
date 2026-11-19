@@ -1738,3 +1738,63 @@ def test_preview_is_decimated_and_frame_aligned(tmp_path: Path) -> None:
     preview_y = _decode_center_luma(preview, 5)
     for k, y in enumerate(preview_y):
         assert abs(y - main_y[20 * k]) <= 2, f"preview frame {k} is not source frame {20 * k}"
+
+
+# ---------------------------------------------------------------------------
+# metadata rows against the source, before encoding
+# ---------------------------------------------------------------------------
+
+
+def _patch_counted_probe(monkeypatch, *, nb_frames: str | None, nb_read_packets: str | None) -> list[bool]:
+    """Fake probe() with a frame count in the header and/or from counting packets; return the count_packets calls."""
+    calls: list[bool] = []
+
+    def fake_probe(_path, *, count_packets=False):
+        calls.append(count_packets)
+        stream = {
+            "pix_fmt": "gbrp",
+            "color_space": "gbr",
+            "color_range": "pc",
+            "r_frame_rate": "500/1",
+            "time_base": "1/500",
+        }
+        if nb_frames is not None:
+            stream["nb_frames"] = nb_frames
+        if count_packets and nb_read_packets is not None:
+            stream["nb_read_packets"] = nb_read_packets
+        return {"streams": [stream], "format": {"format_name": "avi"}}
+
+    monkeypatch.setattr(transcode_mod, "probe", fake_probe)
+    return calls
+
+
+def _metadata_csv(tmp_path: Path, rows: int) -> Path:
+    pytest.importorskip("pyarrow")
+    path = tmp_path / "metadata.csv"
+    path.write_text("ReferenceTime\n" + "".join(f"{n / 500}\n" for n in range(rows)))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("nb_frames", "nb_read_packets", "counted"),
+    [("120", None, False), (None, "120", True), ("0", "120", True)],
+    ids=["header", "no-header-count", "unfinished-header"],
+)
+def test_metadata_rows_are_checked_before_encoding(monkeypatch, tmp_path, nb_frames, nb_read_packets, counted):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS)
+    calls = _patch_counted_probe(monkeypatch, nb_frames=nb_frames, nb_read_packets=nb_read_packets)
+    metadata_csv = _metadata_csv(tmp_path, 100)
+    with pytest.raises(RuntimeError, match=r"100 rows but .* has 120 frames.*nothing was encoded"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", preview_fps=25.0, metadata_csv=metadata_csv)
+    assert captured == []
+    assert (True in calls) == counted
+
+
+def test_metadata_check_defers_to_the_encode_without_a_count(monkeypatch, tmp_path):
+    captured = _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(120, 120, 6))
+    _patch_counted_probe(monkeypatch, nb_frames=None, nb_read_packets=None)
+    metadata_csv = _metadata_csv(tmp_path, 100)
+    # Only the check after the encode can catch it, from ffmpeg's total of 120.
+    with pytest.raises(RuntimeError, match="would not line up"):
+        transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", preview_fps=25.0, metadata_csv=metadata_csv)
+    assert len(captured) == 1

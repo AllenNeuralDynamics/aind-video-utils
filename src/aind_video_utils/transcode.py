@@ -161,7 +161,7 @@ def _effective_profile(
     poster_at_seconds: float | None,
     count_frames: bool,
     spec_names: bool,
-) -> tuple[EncodingProfile, int | None]:
+) -> tuple[EncodingProfile, int | None, ProbeDict | None]:
     """Apply the probe-driven adjustments to *profile*.
 
     Prepends the per-source ``setparams`` colour clause (when
@@ -174,8 +174,8 @@ def _effective_profile(
     ``spec_names`` the derivatives take the spec's file names, and otherwise
     the primary's stem and a suffix.
 
-    Returns the profile and the preview's decimation factor, ``None`` without
-    a preview.
+    Returns the profile, the preview's decimation factor (``None`` without a
+    preview) and the source's probe (``None`` if nothing needed one).
     """
     effective = profile
     poster = poster or poster_at_seconds is not None
@@ -207,7 +207,27 @@ def _effective_profile(
         effective = with_poster(
             effective, probe_json, at_seconds=poster_at_seconds, filename=POSTER_FILENAME if spec_names else None
         )
-    return effective, factor
+    return effective, factor, probe_json
+
+
+def _check_metadata_rows_against_source(
+    frame_metadata: Any, probe_json: ProbeDict, input_path: Path, metadata_csv: Path
+) -> None:
+    """Raise before encoding if *metadata_csv* cannot have one row per frame of *input_path*.
+
+    Counts packets when the container records no count, or records 0 as a
+    header left unfinished by a killed recording does.  Skips when no count can
+    be had; the check after encoding still applies.
+    """
+    frames = get_exact_nb_frames(probe_json)
+    if not frames:
+        counted = probe(input_path, count_packets=True)["streams"][0].get("nb_read_packets", "N/A")
+        frames = int(counted) if counted != "N/A" else None
+    if frames and frame_metadata.num_rows != frames:
+        raise RuntimeError(
+            f"{metadata_csv} has {frame_metadata.num_rows} rows but {input_path} has {frames} frames. "
+            f"{metadata_csv.name} needs one row per frame of its video, so nothing was encoded."
+        )
 
 
 def _check_derivatives_written(counts: _FrameCounts, paths: list[Path]) -> None:
@@ -400,8 +420,10 @@ def transcode_video(
         ``ReferenceTime`` column, decimated as the preview is, is written to
         ``preview_metadata.parquet`` (or ``<stem>_preview_metadata.parquet``)
         beside *output_path*, which the spec requires of every preview.  It is read before encoding, so a missing
-        file, column or the ``parquet`` extra fails fast.  Values are copied
-        as recorded, flaws included.  See
+        file, column or the ``parquet`` extra fails fast, as does a row count
+        other than the source's frame count.  A source whose container records
+        no frame count has its packets counted for this, reading it once more.
+        Values are copied as recorded, flaws included.  See
         :mod:`aind_video_utils.preview_metadata`.
     poster : bool
         When ``True``, also write ``poster.jpg`` (or ``<stem>_poster.jpg``)
@@ -451,8 +473,9 @@ def transcode_video(
         differs from the decoded source's, or ffmpeg reported decode errors or
         no frame totals; if ``normalize_cfr`` is set without ``frame_rate`` on a
         source whose rate cannot be measured; if ``metadata_csv`` has a row count other
-        than the primary output's frame count; or if ffmpeg exited zero
-        without writing a frame to a derivative.
+        than the source's frame count, before encoding, or the primary
+        output's; or if ffmpeg exited zero without writing a frame to a
+        derivative.
     ValueError
         If ``metadata_csv`` is given without ``preview_fps``, or lacks the
         ``ReferenceTime`` column, or ``threads`` is less than 1, or
@@ -478,7 +501,7 @@ def transcode_video(
         warn_if_frames_dropped(metadata_csv)
     if not normalize_cfr:
         _warn_if_notched(input_path)
-    effective, factor = _effective_profile(
+    effective, factor, probe_json = _effective_profile(
         profile,
         input_path,
         auto_fix_colorspace=auto_fix_colorspace,
@@ -491,6 +514,9 @@ def transcode_video(
         count_frames=count_frames,
         spec_names=output_path.stem == _SPEC_PRIMARY_STEM,
     )
+    if frame_metadata is not None:
+        assert metadata_csv is not None and probe_json is not None
+        _check_metadata_rows_against_source(frame_metadata, probe_json, input_path, metadata_csv)
 
     # -threads binds the codec of the input or output it precedes, so the
     # decoder and every encoder each need their own copy.
