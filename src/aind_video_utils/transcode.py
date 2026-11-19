@@ -11,7 +11,8 @@ import subprocess
 import threading
 import warnings
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -228,6 +229,21 @@ def _check_metadata_rows_against_source(
             f"{metadata_csv} has {frame_metadata.num_rows} rows but {input_path} has {frames} frames. "
             f"{metadata_csv.name} needs one row per frame of its video, so nothing was encoded."
         )
+
+
+@contextmanager
+def _removed_on_failure(paths: list[Path]) -> Iterator[None]:
+    """Delete *paths* if the block raises.
+
+    Outputs that fail a check after ffmpeg succeeds are complete and playable,
+    so left behind they would pass for good ones.
+    """
+    try:
+        yield
+    except BaseException:
+        for path in paths:
+            path.unlink(missing_ok=True)
+        raise
 
 
 def _check_derivatives_written(counts: _FrameCounts, paths: list[Path]) -> None:
@@ -459,7 +475,7 @@ def transcode_video(
     Path
         *output_path* on success.  Derivative outputs are written but not
         returned; ask ``profile.output_paths(output_path)`` for every path a
-        profile writes.
+        profile writes.  On failure every output is removed.
 
     Raises
     ------
@@ -535,15 +551,19 @@ def transcode_video(
             cmd.append("-an")
         cmd.append(str(path))
 
-    counts = _run_ffmpeg(cmd, on_progress=on_progress)
-    if fail_on_frame_drop:
-        _check_frame_count(counts, input_path, output_path)
-    _check_derivatives_written(counts, effective.output_paths(output_path)[1:])
+    output_paths = effective.output_paths(output_path)
+    metadata_path = None
     if frame_metadata is not None:
-        assert metadata_csv is not None and factor is not None
         # with_preview appends after the caller's own derivatives.
         preview_path = effective.derivatives[len(profile.derivatives)].output_path_for(output_path)
         metadata_path = preview_metadata_path(preview_path)
-        _check_metadata_rows(frame_metadata, counts, metadata_csv, output_path, metadata_path)
-        write_decimated(frame_metadata, metadata_path, factor)
+    with _removed_on_failure([*output_paths, *([metadata_path] if metadata_path else [])]):
+        counts = _run_ffmpeg(cmd, on_progress=on_progress)
+        if fail_on_frame_drop:
+            _check_frame_count(counts, input_path, output_path)
+        _check_derivatives_written(counts, output_paths[1:])
+        if frame_metadata is not None:
+            assert metadata_csv is not None and factor is not None and metadata_path is not None
+            _check_metadata_rows(frame_metadata, counts, metadata_csv, output_path, metadata_path)
+            write_decimated(frame_metadata, metadata_path, factor)
     return output_path
