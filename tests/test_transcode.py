@@ -1798,3 +1798,16 @@ def test_metadata_check_defers_to_the_encode_without_a_count(monkeypatch, tmp_pa
     with pytest.raises(RuntimeError, match="would not line up"):
         transcode_video(tmp_path / "in.avi", tmp_path / "video.mp4", preview_fps=25.0, metadata_csv=metadata_csv)
     assert len(captured) == 1
+    assert not (tmp_path / "preview_metadata.parquet").exists()
+
+
+def test_failed_transcode_removes_its_outputs(monkeypatch, tmp_path):
+    _patch_ffmpeg(monkeypatch, stdout_bytes=_CLEAN_PROGRESS, stderr_bytes=_summary(1000, 994, 50))
+    written = [tmp_path / "out.mp4", tmp_path / "out_preview.mp4"]
+    bystander = tmp_path / "in.avi"
+    for path in (*written, bystander):
+        path.write_bytes(b"x")
+    with pytest.raises(RuntimeError, match="994 frames"):
+        transcode_video(bystander, tmp_path / "out.mp4", preview_fps=25.0)
+    assert [path.exists() for path in written] == [False, False]
+    assert bystander.exists()
