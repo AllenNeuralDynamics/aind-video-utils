@@ -27,6 +27,7 @@ from aind_video_utils.encoding import (
     with_preview,
     with_setparams,
 )
+from aind_video_utils.frame_grid import NominalGrid, fit_nominal_grid
 from aind_video_utils.frames import extract_frame_by_index, extract_luma_frame, extract_srgb_frame
 from aind_video_utils.mp4_index import EditListEntry, Mp4FrameIndex, TimelineNotches, read_mp4_frame_index
 from aind_video_utils.preview_metadata import (
@@ -44,7 +45,7 @@ from aind_video_utils.probe import (
     get_video_range_info,
     probe,
 )
-from aind_video_utils.restamp import restamp_uniform
+from aind_video_utils.restamp import RestampResult, restamp_nominal, restamp_uniform
 from aind_video_utils.transcode import VIDEO_EXTENSIONS, FfmpegError, NotchedTimelineWarning, transcode_video
 
 try:
@@ -69,14 +70,17 @@ __all__ = [
     "FfmpegError",
     "FrameTiming",
     "Mp4FrameIndex",
+    "NominalGrid",
     "NotchedTimelineWarning",
     "RangeOverride",
     "RepairedFrameTimes",
+    "RestampResult",
     "TimelineNotches",
     "__version__",
     "extract_frame_by_index",
     "extract_luma_frame",
     "extract_srgb_frame",
+    "fit_nominal_grid",
     "get_color_transfer",
     "get_exact_nb_frames",
     "get_frame_dimensions",
@@ -93,6 +97,7 @@ __all__ = [
     "read_mp4_frame_index",
     "rec_709_trc_to_linear",
     "repair_frame_times",
+    "restamp_nominal",
     "restamp_uniform",
     "transcode_video",
     "video_frame_rows",

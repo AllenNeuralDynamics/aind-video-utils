@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
+from functools import partial
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from aind_video_utils.mp4_index import read_mp4_frame_index
-from aind_video_utils.restamp import _check_repairable, restamp_uniform
+from aind_video_utils.restamp import _check_repairable, _plan_nominal, restamp_nominal, restamp_uniform
 
 COLUMNS: tuple[str, ...] = (
     "source",
@@ -30,6 +32,9 @@ COLUMNS: tuple[str, ...] = (
     "dts_notches",
     "edits",
     "repairable",
+    "nominal_rate",
+    "nominal_repairable",
+    "nominal_max_residual",
     "error",
 )
 
@@ -42,8 +47,23 @@ def _readable(source: str) -> str | Path:
     return source if source.startswith(("http://", "https://")) else Path(source)
 
 
-def report(source: str) -> dict[str, object]:
-    """Return one CSV row describing *source*'s timeline; an unreadable file fills ``error``."""
+def _frame_rate(value: str) -> Fraction:
+    """Parse a rate such as ``120`` or ``30000/1001``."""
+    try:
+        rate = Fraction(value)
+    except (ValueError, ZeroDivisionError):
+        raise argparse.ArgumentTypeError(f"not a frame rate: {value!r}") from None
+    if rate <= 0:
+        raise argparse.ArgumentTypeError(f"frame rate must be positive, got {value}")
+    return rate
+
+
+def report(source: str, nominal_rate: Fraction | None = None) -> dict[str, object]:
+    """Return one CSV row describing *source*'s timeline; an unreadable file fills ``error``.
+
+    With *nominal_rate*, the ``nominal_*`` columns say whether
+    :func:`~aind_video_utils.restamp.restamp_nominal` would accept the file at it.
+    """
     row: dict[str, object] = dict.fromkeys(COLUMNS, "")
     row["source"] = source
     try:
@@ -70,6 +90,14 @@ def report(source: str) -> dict[str, object]:
         edits=len(index.edits),
         repairable=repairable,
     )
+    if nominal_rate is not None:
+        row["nominal_rate"] = f"{nominal_rate.numerator}/{nominal_rate.denominator}"
+        try:
+            plan = _plan_nominal(index, nominal_rate)
+            row["nominal_repairable"] = "yes"
+            row["nominal_max_residual"] = f"{plan.grid.max_residual:.3f}"
+        except ValueError as err:
+            row["nominal_repairable"] = f"no: {err}"
     return row
 
 
@@ -90,7 +118,7 @@ def _notches(args: argparse.Namespace) -> int:
         writer = csv.DictWriter(out, fieldnames=COLUMNS)
         writer.writeheader()
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            for row in pool.map(report, sources):
+            for row in pool.map(partial(report, nominal_rate=args.frame_rate), sources):
                 writer.writerow(row)
                 out.flush()
     finally:
@@ -100,8 +128,17 @@ def _notches(args: argparse.Namespace) -> int:
 
 
 def _restamp(args: argparse.Namespace) -> int:
-    restamp_uniform(_readable(args.source), args.destination)
-    print(f"Wrote {args.destination}")
+    if args.frame_rate is None:
+        if args.keep_gaps:
+            print("--keep-gaps needs --frame-rate", file=sys.stderr)
+            return 2
+        restamp_uniform(_readable(args.source), args.destination)
+        print(f"Wrote {args.destination}")
+        return 0
+    result = restamp_nominal(
+        _readable(args.source), args.destination, frame_rate=args.frame_rate, keep_gaps=args.keep_gaps
+    )
+    print(json.dumps(result.as_record(), indent=2))
     return 0
 
 
@@ -125,6 +162,11 @@ def main() -> None:
     p_notches.add_argument("--list", type=Path, help="File of sources, one per line; # starts a comment.")
     p_notches.add_argument("--output", "-o", type=Path, help="CSV path; defaults to stdout.")
     p_notches.add_argument("--jobs", "-j", type=int, default=8, help="Files read concurrently (default: 8).")
+    p_notches.add_argument(
+        "--frame-rate",
+        type=_frame_rate,
+        help="Nominal rate, such as 120 or 30000/1001, to check each file against for restamp --frame-rate.",
+    )
 
     p_restamp = subparsers.add_parser(
         "restamp",
@@ -132,6 +174,18 @@ def main() -> None:
     )
     p_restamp.add_argument("source", help="MP4 path, http(s):// URL or s3:// URI.")
     p_restamp.add_argument("destination", type=Path, help="Local output path.")
+    p_restamp.add_argument(
+        "--frame-rate",
+        type=_frame_rate,
+        help=(
+            "The acquisition's nominal rate, such as 120 or 30000/1001.  Puts each frame on that rate's grid "
+            "in a timescale where a period is whole, and prints what changed as JSON; without it, the file's "
+            "own period and timescale are kept."
+        ),
+    )
+    p_restamp.add_argument(
+        "--keep-gaps", action="store_true", help="Keep skipped slots as gaps instead of erasing them (--frame-rate)."
+    )
 
     args = parser.parse_args()
     sys.exit(_notches(args) if args.command == "notches" else _restamp(args))
