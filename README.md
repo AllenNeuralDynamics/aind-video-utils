@@ -242,14 +242,27 @@ removes the notches without re-encoding and checks the result before returning
 it; a leading empty edit, which only delays the first frame, is dropped. `transcode_video()` warns with `NotchedTimelineWarning` when an MP4 or MOV
 source is notched, since the output keeps the notches unless `normalize_cfr=True`.
 
+`restamp_uniform()` keeps the file's timescale, so it needs every step to be a
+whole number of periods in the file's own ticks. A file that went through
+Matroska has its timestamps rounded to 1 ms, and at 120, 60 or 30 fps a period
+is not a whole number of ticks at the usual 16000. `restamp_nominal()` takes the
+acquisition's nominal rate, refuses the file unless every frame sits within 0.25
+period of that rate's grid, and moves each frame to its slot in a timescale
+where a period is whole (15360 for these rates). It returns a `RestampResult`
+saying what it changed, for the provenance record. `keep_gaps=True` keeps
+skipped slots as gaps rather than erasing them.
+
 ```python
 from pathlib import Path
 
-from aind_video_utils import read_mp4_frame_index, restamp_uniform
+from aind_video_utils import read_mp4_frame_index, restamp_nominal, restamp_uniform
 
 notches = read_mp4_frame_index("bottom_camera.mp4").timeline_notches()
 if not notches.is_uniform:
     restamp_uniform("bottom_camera.mp4", Path("/scratch/bottom_camera.mp4"))
+
+result = restamp_nominal("side_camera.mp4", Path("/scratch/side_camera.mp4"), frame_rate=120)
+result.as_record()  # rate, timescales, notches erased, largest residual
 ```
 
 The `aind-mp4-timeline` command needs no extra:
@@ -258,6 +271,8 @@ The `aind-mp4-timeline` command needs no extra:
 aind-mp4-timeline notches a.mp4 https://host/b.mp4 s3://aind-open-data/.../c.mp4 -o notches.csv
 aind-mp4-timeline notches --list videos.txt -j 16      # one source per line
 aind-mp4-timeline restamp bottom_camera.mp4 /scratch/bottom_camera.mp4
+aind-mp4-timeline notches --frame-rate 120 --list videos.txt  # would restamp --frame-rate accept each?
+aind-mp4-timeline restamp --frame-rate 120 side_camera.mp4 /scratch/side_camera.mp4
 ```
 
 ### Acquisition Timing
