@@ -21,7 +21,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.13"]
+        # Floor and ceiling. They coincide when a project targets its own
+        # minimum, and a matrix must not then run the same version twice.
+        python-version: ["3.11", "3.13"]
 
     if: >
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
@@ -37,4 +39,7 @@ jobs:
       # plotting, video_qc and the CLIs are the optional modules those extras exist for.
       smoke-extras: plotting,transcode,parquet
     secrets:
+      # Passed on to `uv sync` as a git `url.insteadOf` credential, so
+      # internal or private git dependencies pinned in [tool.uv.sources]
+      # can be cloned. Harmless to leave in when all deps are public.
       repo-token: ${{ secrets.GITHUB_TOKEN }}

@@ -17,15 +17,27 @@ uv sync    # dev dependencies, including every optional extra
 uv run pytest tests/test_transcode.py::test_name        # one test
 ```
 
+The same checks, one at a time; codespell reads only the files git tracks:
+
+```bash
+uv run --frozen ruff format
+uv run --frozen ruff check
+uv run --frozen mypy
+uv run --frozen interrogate -v src
+git ls-files -z | xargs -0 uv run --frozen codespell --check-filenames
+uv run --frozen pytest --cov aind_video_utils
+```
+
 Run tools through `uv run` or the script, which use the versions `uv.lock` pins; a globally installed ruff or mypy
 can disagree with them.
 
-CI runs the reusable workflow in `AllenNeuralDynamics/galen-uv-workflows` on Python 3.10 and 3.13, and also installs the
-wheel without extras. The script covers neither, so check them before pushing:
+CI runs the reusable workflow in `AllenNeuralDynamics/galen-uv-workflows` on Python 3.11 and 3.13, and also installs the
+wheel without extras. The script covers neither, so before every commit run it with `-c`, then these two, and fold
+any reformatting into the same commit:
 
 ```bash
 # mypy on the oldest supported Python
-uv run --python 3.10 --isolated --with mypy --with pyarrow --with pydantic-settings --with rich \
+uv run --python 3.11 --isolated --with mypy --with pyarrow --with pydantic-settings --with rich \
   --with matplotlib --with opencv-python-headless mypy
 
 # the tests pass against the wheel without any optional dependency, run outside the
@@ -40,7 +52,8 @@ The package is the canonical Python implementation of the
 [AIND behavior video file standard](https://allenneuraldynamics.github.io/aind-file-standards/file_formats/behavior_videos/).
 `SPEC_VERSION` in `encoding.py` is the revision of that document the code implements, matching its `## Version`
 heading, and is independent of the package version. A change to the standard's encoder settings, file names or
-derivatives lands here with a `SPEC_VERSION` bump.
+derivatives lands here with a `SPEC_VERSION` bump. Read the standard, `docs/file_formats/behavior_videos.md` in
+`AllenNeuralDynamics/aind-file-standards`, before changing a profile, a derivative or an output name.
 
 Under `src/aind_video_utils/`:
 
@@ -81,7 +94,11 @@ The public API is what `src/aind_video_utils/__init__.py` re-exports; add to it 
   with type `feat`, `fix`, `docs`, `ci`, `build`, `perf`, `refactor`, `style` or `test`. `major_version_zero` is set,
   so a breaking change bumps the minor version.
 - CI bumps the version after a merge to `main`, in a commit starting `bump:`, which CI skips.
-- ruff: line length 120, target py310, NumPy docstrings. `benchmarks/`, `notebooks/` and `scripts/` at the repository
+- ruff: line length 120, target py311, NumPy docstrings. `benchmarks/`, `notebooks/` and `scripts/` at the repository
   root are excluded.
+- `scratch/` is gitignored and excluded from the linters, for work that is not kept.
+- Comments and docstrings say what the code does not: why it is written this way, and what breaks otherwise. They carry
+  no history; the reason for a change belongs in its commit message.
+- A change a user would notice updates README.md in the same commit.
 - mypy is strict on `src/aind_video_utils`; tests may leave functions untyped.
 - Internal members branch in this repository; external contributors open a pull request from a fork.
