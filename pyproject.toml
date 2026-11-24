@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "aind-video-utils"
 description = "Tools to work with videos using ffmpeg"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
   { name = "Allen Institute for Neural Dynamics" },
   { name = "Galen Lynch", email = "galen@galenlynch.com" },
@@ -44,19 +44,18 @@ packages = ["src/aind_video_utils"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
-extend-exclude = ["benchmarks", "notebooks", "scripts"]
+target-version = "py311"
+extend-exclude = ["benchmarks", "notebooks", "scripts", "scratch"]
 
 [tool.ruff.lint]
 extend-select = ["Q", "RUF100", "C90", "I", "F", "E", "W", "UP", "ANN", "PYI"]
 extend-ignore = ["ANN401"]  # Skip self/cls type annotations
-# Skip all type annotation checks in tests
-per-file-ignores = { "tests/*.py" = ["ANN"] }
+per-file-ignores = { "tests/*.py" = ["ANN", "D"] }
 mccabe = { max-complexity = 14 }
 pydocstyle = { convention = "numpy" }
 
 [tool.codespell]
-skip = ".git,*.pdf,*.svg,./bonsai,*.bonsai,uv.lock"
+skip = ".git,*.pdf,*.svg,./bonsai,*.bonsai,uv.lock,scratch"
 ignore-words-list = "nd,setts"
 
 [tool.pytest.ini_options]
@@ -75,6 +74,8 @@ exclude = [
   "build",
   "examples",
   "site",
+  "scratch",
+  ".venv",
 ]
 
 [tool.commitizen]
@@ -88,6 +89,7 @@ files = ["src/aind_video_utils"]
 strict = true
 show_error_codes = true
 warn_unused_ignores = false
+exclude = ["scratch"]
 
 [[tool.mypy.overrides]]
 module = ["pyarrow", "pyarrow.*"]

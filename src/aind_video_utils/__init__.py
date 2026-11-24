@@ -50,7 +50,8 @@ from aind_video_utils.transcode import VIDEO_EXTENSIONS, FfmpegError, NotchedTim
 try:
     __version__ = version("aind-video-utils")
 except PackageNotFoundError:
-    __version__ = "0.0.0.dev0"
+    # imported without being installed: valid PEP 440, below every release, and plainly not one
+    __version__ = "0+unknown"
 
 __all__ = [
     "OFFLINE_8BIT",

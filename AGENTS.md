@@ -1,11 +1,12 @@
 # AGENTS.md
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, design and conventions. On top of it:
+Instructions for coding agents in this repository. [CONTRIBUTING.md](CONTRIBUTING.md) holds setup,
+checks, tests and conventions, and applies to agents as to people: read it before running or
+changing anything. [README.md](README.md) documents use.
 
-- Run tools through `uv run` or `./scripts/run_linters_and_checks.sh`, never a global ruff or mypy, whose versions
-  differ from the lock file.
-- Before every commit, run `./scripts/run_linters_and_checks.sh -c`, the Python 3.10 mypy and the no-extras wheel
-  tests from CONTRIBUTING.md, and fold any reformatting into the same commit.
-- The encoding profiles mirror `docs/file_formats/behavior_videos.md` in `AllenNeuralDynamics/aind-file-standards`.
-  Read that document before changing a profile, a derivative or an output name, and keep `SPEC_VERSION` equal to its
-  version.
+- Run every command through `uv` or `./scripts/run_linters_and_checks.sh`; never bare `pip` or
+  `python`, and never a globally installed ruff or mypy, whose versions differ from `uv.lock`.
+- Before calling a change done, run every check CONTRIBUTING.md lists for a commit, and read the
+  script's exit code rather than filtering its output.
+- Keep this file to what only an agent needs; development practice belongs in CONTRIBUTING.md,
+  usage in README.md, and what only Claude Code needs in CLAUDE.md.
